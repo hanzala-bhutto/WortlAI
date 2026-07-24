@@ -1,0 +1,31 @@
+# Copyrighted source material — MUST never reach the public repo
+Deustch_Books/
+backend/data/
+
+# Secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+
+# Databases / local state
+*.db
+*.sqlite*
+qdrant_storage/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
