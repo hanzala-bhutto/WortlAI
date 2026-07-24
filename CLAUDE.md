@@ -60,8 +60,8 @@ FastAPI backend
 
 ## Phase status
 
-- Phase 0 (foundation): in progress
-- Phase 1 (voice conversation loop): not started
+- Phase 0 (foundation): ✅ done 2026-07-25 (Project board pending token scope)
+- Phase 1 (voice conversation loop): not started — issues #1–#8 ready, feasibility reports in docs/feasibility/
 - Phase 2 (RAG + learner model + FSRS): not started
 - Phase 3 (listening + assessment + LLMOps): not started
 - Phase 4 (advanced): not started
