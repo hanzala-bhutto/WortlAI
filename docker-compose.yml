@@ -1,0 +1,21 @@
+# Local infrastructure for WortlAI. Only Qdrant for now; the backend and
+# frontend run on the host (uvicorn --reload / next dev) for fast iteration.
+#
+# No healthcheck is defined: the Qdrant image ships no shell or curl, so
+# readiness is probed from the host instead (GET http://localhost:6333/readyz),
+# which is what the /dev skill and the backend's /health endpoint do.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    container_name: wortlai-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333" # REST + dashboard at http://localhost:6333/dashboard
+      - "6334:6334" # gRPC
+    volumes:
+      # Named volume, not a bind mount: avoids Docker Desktop drive-sharing
+      # quirks on Windows (see docs/feasibility/001-scaffold.md).
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:

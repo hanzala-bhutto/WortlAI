@@ -1,0 +1,53 @@
+"""Settings loaded from the repo-root .env. See .env.example for every value."""
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# app/config.py -> app -> backend -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_DIR = REPO_ROOT / "backend"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=REPO_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # API keys. Empty means the feature is unavailable, which /health reports;
+    # it is not a startup error.
+    groq_api_key: str = ""
+    nim_api_key: str = ""
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+
+    # Everything below is required: no default, so a missing value fails at boot
+    # rather than silently pointing somewhere plausible.
+    langfuse_host: str
+    qdrant_url: str
+
+    llm_model_primary: str
+    llm_model_secondary: str
+    stt_model: str
+    tts_voice: str
+
+    cors_origins: list[str]
+
+    data_dir: Path = BACKEND_DIR / "data"
+
+    def configured_keys(self) -> dict[str, bool]:
+        """Which credentials are present, so a misconfigured .env shows up before
+        it fails mid-conversation."""
+        return {
+            "groq": bool(self.groq_api_key),
+            "nim": bool(self.nim_api_key),
+            "langfuse": bool(self.langfuse_public_key and self.langfuse_secret_key),
+        }
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
