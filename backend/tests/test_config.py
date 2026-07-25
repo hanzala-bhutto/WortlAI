@@ -11,8 +11,11 @@ from app.config import Settings
 REQUIRED_ENV = {
     "QDRANT_URL": "http://localhost:6333",
     "LANGFUSE_HOST": "http://localhost:3000",
+    "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+    "NIM_BASE_URL": "https://integrate.api.nvidia.com/v1",
     "LLM_MODEL_PRIMARY": "openai/gpt-oss-120b",
     "LLM_MODEL_SECONDARY": "llama-3.3-70b-versatile",
+    "LLM_MODEL_FALLBACK": "meta/llama-3.3-70b-instruct",
     "STT_MODEL": "whisper-large-v3-turbo",
     "TTS_VOICE": "de-DE-KatjaNeural",
     "CORS_ORIGINS": '["http://localhost:3001"]',

@@ -21,3 +21,15 @@ M (half-day) incl. mocked-HTTP tests for fallback paths.
 
 ## Verdict
 **GO** - with the German-quality mini-spike inside the same branch.
+
+## Mini-spike result (2026-07-25)
+Ran 10 A2-tutor exchanges through both Groq models via the provider layer.
+- `gpt-oss-120b`: good German, German-only, always ends with a follow-up question.
+  Trends verbose and sometimes above A2 density (lists of cafes/sights). One
+  transient empty reply, non-reproducible.
+- `llama-3.3-70b`: slightly better A2 calibration - shorter, cleaner, one focused
+  follow-up per turn.
+
+Both are viable; not enough to overturn the locked primary. Kept `gpt-oss-120b`
+primary as planned. Takeaway for #4: the CEFR-level output guardrail (guardrail 2)
+earns its keep against gpt-oss verbosity - the prompt alone will not hold A2.
