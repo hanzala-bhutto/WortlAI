@@ -6,6 +6,10 @@ Deustch_Books/
 Deutsch_Books/
 backend/data/
 
+# Content acquisition scripts. Kept locally, never pushed: they fetch copyrighted
+# publisher material and the manifest lists those source URLs.
+scripts/acquire/
+
 # Secrets
 .env
 *.env.local
