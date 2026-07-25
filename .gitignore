@@ -1,5 +1,9 @@
-# Copyrighted source material - MUST never reach the public repo
+# Copyrighted source material - MUST never reach the public repo.
+# The folder on disk is Deutsch_Books. The misspelling is kept as well because
+# it existed earlier and a rename in either direction must not silently expose
+# the files.
 Deustch_Books/
+Deutsch_Books/
 backend/data/
 
 # Secrets
