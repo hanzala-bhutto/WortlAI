@@ -3,7 +3,7 @@ name: eval
 description: Run the WortlAI eval suite (Corrector precision/recall vs gold dataset, Tutor LLM-as-judge) against current prompt versions, compare to baseline, and report metric deltas. Use after any prompt or agent change, before promoting prompts to production.
 ---
 
-# /eval — evaluate agent quality vs gold datasets
+# /eval - evaluate agent quality vs gold datasets
 
 **Status: harness lands in Phase 3.** Until `backend/app/evals/` exists, report that and stop.
 
@@ -21,5 +21,5 @@ Table: metric | baseline | current | delta. Flag any regression >2pp in red. Ver
 
 ## Guardrails
 
-- Never promote a prompt to `production` label yourself — report the verdict; Hanzala promotes.
+- Never promote a prompt to `production` label yourself - report the verdict; Hanzala promotes.
 - If the gold dataset has <20 items for a suite, warn that metrics are noise and say how to grow it (triage 👍/👎 feedback).

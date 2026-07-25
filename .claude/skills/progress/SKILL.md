@@ -1,9 +1,9 @@
 ---
 name: progress
-description: Generate Hanzala's German learning progress report from the WortlAI learner DB — immersion hours vs the 2-month protocol target, FSRS due counts, error-type trends, CEFR trajectory. Use when asked "how am I doing" or for the weekly review.
+description: Generate Hanzala's German learning progress report from the WortlAI learner DB - immersion hours vs the 2-month protocol target, FSRS due counts, error-type trends, CEFR trajectory. Use when asked "how am I doing" or for the weekly review.
 ---
 
-# /progress — learner progress report
+# /progress - learner progress report
 
 **Status: learner DB lands in Phase 1–2.** Until `backend/data/wortlai.db` has session data, report that and stop.
 
@@ -18,4 +18,4 @@ description: Generate Hanzala's German learning progress report from the WortlAI
 
 ## Report
 
-Short prose summary first (the "how am I actually doing" answer — honest: if pace implies 6 months, say so). Then compact tables. Close with the single highest-leverage recommendation for next week (e.g. "your Perfekt-auxiliary errors aren't falling — request a scenario focused on past-tense storytelling").
+Short prose summary first (the "how am I actually doing" answer - honest: if pace implies 6 months, say so). Then compact tables. Close with the single highest-leverage recommendation for next week (e.g. "your Perfekt-auxiliary errors aren't falling - request a scenario focused on past-tense storytelling").

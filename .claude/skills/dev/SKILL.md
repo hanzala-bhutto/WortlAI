@@ -3,7 +3,7 @@ name: dev
 description: Start the full WortlAI stack (Qdrant via docker compose, FastAPI backend, Next.js frontend) and health-check every service. Use when the user wants to run, start, or restart the app.
 ---
 
-# /dev — start and verify the full stack
+# /dev - start and verify the full stack
 
 ## Steps
 

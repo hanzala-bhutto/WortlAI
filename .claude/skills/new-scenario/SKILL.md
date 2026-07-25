@@ -1,15 +1,15 @@
 ---
 name: new-scenario
-description: Scaffold a new WortlAI roleplay scenario end-to-end — system prompt, Redemittel/vocab links, level calibration, registry entry. Use when adding a conversation scenario (e.g. "Termin beim Arzt", "Wohnungsbesichtigung").
+description: Scaffold a new WortlAI roleplay scenario end-to-end - system prompt, Redemittel/vocab links, level calibration, registry entry. Use when adding a conversation scenario (e.g. "Termin beim Arzt", "Wohnungsbesichtigung").
 ---
 
-# /new-scenario — scaffold a roleplay scenario
+# /new-scenario - scaffold a roleplay scenario
 
 **Status: scenario registry lands in Phase 1.** Until `backend/app/agents/scenarios/` exists, report that and stop.
 
 ## Inputs (ask if not given)
 
-- Scenario name (German), goal with stakes (what does "success" mean — e.g. "get the Termin"), CEFR level range, tutor persona (friendly Bäckerin? grumpy Beamter? which TTS voice).
+- Scenario name (German), goal with stakes (what does "success" mean - e.g. "get the Termin"), CEFR level range, tutor persona (friendly Bäckerin? grumpy Beamter? which TTS voice).
 
 ## Steps
 
