@@ -1,0 +1,15 @@
+# WortlAI backend - Python 3.12
+#
+# Scaffold scope only (issue #1). Each later issue adds its own dependencies
+# alongside the code that needs them, so a fresh clone always installs a set
+# that is actually exercised: groq (#2, #3), edge-tts (#3), langgraph (#4),
+# sqlalchemy + py-fsrs (#7), langfuse (#8), llamaindex + qdrant-client (Phase 2).
+
+fastapi==0.140.0
+uvicorn[standard]==0.51.0
+pydantic-settings==2.14.2
+httpx==0.28.1
+
+# Dev / test
+pytest==9.1.1
+pytest-asyncio==1.4.0
