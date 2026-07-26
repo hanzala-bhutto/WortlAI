@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings, get_settings
+from app.llmops.tracing import Tracing
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +86,14 @@ class LLMProvider:
         self,
         settings: Settings | None = None,
         client: httpx.AsyncClient | None = None,
+        tracing: Tracing | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._client = client
         self._owns_client = client is None
+        # Defaults to a disabled no-op; the app wires build_tracing() so every LLM
+        # call is traced. Which model actually answered is recorded on success.
+        self._tracing = tracing or Tracing(client=None)
 
     async def __aenter__(self) -> "LLMProvider":
         return self
@@ -159,13 +164,19 @@ class LLMProvider:
     ) -> str:
         """Full, non-streamed reply from the first model in the chain that answers."""
         last_error: Exception | None = None
-        for target in self._chain():
-            try:
-                return await self._complete_one(target, messages, temperature, max_tokens)
-            except _ModelFailed as exc:
-                logger.warning("LLM %s/%s failed, falling back: %s", target.provider, target.model, exc)
-                last_error = exc
-        raise ProviderError("All LLM providers failed.") from last_error
+        with self._tracing.generation(
+            name="llm.complete", input=messages, metadata={"temperature": temperature}
+        ) as gen:
+            for target in self._chain():
+                try:
+                    reply = await self._complete_one(target, messages, temperature, max_tokens)
+                except _ModelFailed as exc:
+                    logger.warning("LLM %s/%s failed, falling back: %s", target.provider, target.model, exc)
+                    last_error = exc
+                    continue
+                gen.update(output=reply, model=target.model)
+                return reply
+            raise ProviderError("All LLM providers failed.") from last_error
 
     async def _complete_one(
         self,
@@ -207,15 +218,22 @@ class LLMProvider:
         """Yield reply tokens as they arrive. Falls back only before the first
         token; a failure after tokens have been emitted is raised, not retried."""
         last_error: Exception | None = None
-        for target in self._chain():
-            try:
-                async for token in self._stream_one(target, messages, temperature, max_tokens):
-                    yield token
+        with self._tracing.generation(
+            name="llm.stream", input=messages, metadata={"temperature": temperature}
+        ) as gen:
+            for target in self._chain():
+                chunks: list[str] = []
+                try:
+                    async for token in self._stream_one(target, messages, temperature, max_tokens):
+                        chunks.append(token)
+                        yield token
+                except _ModelFailed as exc:
+                    logger.warning("LLM %s/%s stream failed, falling back: %s", target.provider, target.model, exc)
+                    last_error = exc
+                    continue
+                gen.update(output="".join(chunks), model=target.model)
                 return
-            except _ModelFailed as exc:
-                logger.warning("LLM %s/%s stream failed, falling back: %s", target.provider, target.model, exc)
-                last_error = exc
-        raise ProviderError("All LLM providers failed.") from last_error
+            raise ProviderError("All LLM providers failed.") from last_error
 
     async def _stream_one(
         self,

@@ -10,7 +10,7 @@ from app.config import Settings
 
 REQUIRED_ENV = {
     "QDRANT_URL": "http://localhost:6333",
-    "LANGFUSE_HOST": "http://localhost:3000",
+    "LANGFUSE_BASE_URL": "http://localhost:3000",
     "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
     "NIM_BASE_URL": "https://integrate.api.nvidia.com/v1",
     "LLM_MODEL_PRIMARY": "openai/gpt-oss-120b",

@@ -13,7 +13,7 @@ Trace every agent/LLM call (session id, agent, model, latency, tokens); all prom
 ## Hosting
 Self-hosted. A Langfuse v3 compose stack (web, worker, postgres 17, clickhouse, redis, minio) runs locally under a sibling project at `ApplySync/langfuse/`, on `localhost:3000`. WortlAI uses it via a dedicated Langfuse project with its own key pair; traces, prompt versions, datasets and scores are project-scoped.
 
-WortlAI ships no Langfuse infrastructure - the coupling is `LANGFUSE_HOST` + keys in `.env`. The WortlAI frontend runs on 3001, since Langfuse web holds 3000.
+WortlAI ships no Langfuse infrastructure - the coupling is `LANGFUSE_BASE_URL` + keys in `.env`. The WortlAI frontend runs on 3001, since Langfuse web holds 3000.
 
 ## Risks & unknowns
 - The instance belongs to another project: if it stops, tracing goes dark. Tracing must be non-fatal, and prompts need the disk cache + bundled fallback so sessions still run.
