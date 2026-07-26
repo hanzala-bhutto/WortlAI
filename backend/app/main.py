@@ -1,5 +1,7 @@
 """FastAPI entrypoint. Run from backend/: uvicorn app.main:app --reload"""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -8,7 +10,17 @@ from pydantic import BaseModel
 
 from app.api import health, v1
 from app.config import get_settings
+from app.learner.migrate import upgrade_to_head
 from app.static import FRONTEND_DIST, mount_frontend
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Create or migrate the learner DB on boot so a fresh clone needs no manual
+    # `alembic upgrade`. Runs on real startup only; the test client instantiated
+    # without a `with` block never triggers it, keeping the suite hermetic.
+    upgrade_to_head()
+    yield
 
 
 class ServiceInfo(BaseModel):
@@ -28,8 +40,10 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> FastAPI:
             "are unversioned so probes have a stable address."
         ),
         version="0.1.0",
+        lifespan=lifespan,
         openapi_tags=[
             {"name": "health", "description": "Liveness and readiness probes."},
+            {"name": "learner", "description": "Sessions, errors and immersion hours."},
         ],
     )
 
