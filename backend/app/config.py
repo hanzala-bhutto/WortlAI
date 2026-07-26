@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Everything below is required: no default, so a missing value fails at boot
     # rather than silently pointing somewhere plausible.
-    langfuse_host: str
+    langfuse_base_url: str
     qdrant_url: str
 
     # OpenAI-compatible chat endpoints. Both providers speak the same schema, so

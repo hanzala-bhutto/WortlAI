@@ -8,7 +8,7 @@ keeps the suite hermetic. Runs at import, before any test module imports app.mai
 
 import os
 
-os.environ.setdefault("LANGFUSE_HOST", "http://localhost:3000")
+os.environ.setdefault("LANGFUSE_BASE_URL", "http://localhost:3000")
 os.environ.setdefault("QDRANT_URL", "http://localhost:6333")
 os.environ.setdefault("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 os.environ.setdefault("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
