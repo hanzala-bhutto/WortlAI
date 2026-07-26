@@ -29,8 +29,16 @@ class Settings(BaseSettings):
     langfuse_host: str
     qdrant_url: str
 
+    # OpenAI-compatible chat endpoints. Both providers speak the same schema, so
+    # the provider layer is one client over these base URLs.
+    groq_base_url: str
+    nim_base_url: str
+
+    # The fallback chain, in order: primary and secondary run on Groq, the last
+    # on NVIDIA NIM. No defaults, so a typo fails at boot instead of at 2am.
     llm_model_primary: str
     llm_model_secondary: str
+    llm_model_fallback: str
     stt_model: str
     tts_voice: str
 
