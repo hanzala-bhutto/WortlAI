@@ -46,6 +46,16 @@ class Settings(BaseSettings):
 
     data_dir: Path = BACKEND_DIR / "data"
 
+    # Tutor tuning. Tunables with sane defaults (like data_dir), so a fresh clone
+    # runs without setting them, but changing them never needs a code edit:
+    # - which Langfuse prompt label the Tutor speaks with (flip to "staging" to
+    #   trial a new system prompt without touching production),
+    # - sampling temperature, and the per-reply token ceiling (guardrail #3, a cap
+    #   so a runaway generation can't burn the free tier).
+    tutor_prompt_label: str = "production"
+    tutor_temperature: float = 0.6
+    tutor_max_tokens: int = 320
+
     def configured_keys(self) -> dict[str, bool]:
         """Which credentials are present, so a misconfigured .env shows up before
         it fails mid-conversation."""

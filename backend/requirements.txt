@@ -13,6 +13,15 @@ httpx==0.28.1
 # LLMOps: tracing + prompt management (#7). Pulls in the OpenTelemetry SDK.
 langfuse==4.14.1
 
+# Session orchestration: the conversation as a checkpointed state graph (#4). The
+# checkpointer gets its own SQLite file (checkpoints.db) via aiosqlite, separate
+# from wortlai.db - two writers, no shared connection.
+langgraph==1.2.9
+langgraph-checkpoint-sqlite==3.1.0
+# The async SQLite driver the checkpointer's connection is opened with. A
+# transitive dep of the checkpointer, pinned here because we import it directly.
+aiosqlite==0.22.1
+
 # Learner persistence: sessions, error log, immersion hours (#6). Alembic from
 # day one because the schema grows every phase (FSRS + graph tables in Phase 2).
 sqlalchemy==2.0.36
