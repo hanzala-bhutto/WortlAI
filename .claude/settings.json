@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr create*)",
+            "command": "bash .claude/hooks/pr-metadata-check.sh",
+            "statusMessage": "Checking PR metadata..."
+          }
+        ]
+      }
+    ]
+  }
+}
