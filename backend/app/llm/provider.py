@@ -23,7 +23,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 
 from app.config import Settings, get_settings
 from app.llmops.tracing import Tracing
@@ -77,7 +77,7 @@ def _build_chain(settings: Settings) -> list[_Target]:
 class LLMProvider:
     """Async chat client over the Groq/NIM fallback chain.
 
-    Pass a `client` (e.g. an httpx.AsyncClient on a MockTransport) to make calls
+    Pass a `client` (e.g. an httpx2.AsyncClient on a MockTransport) to make calls
     deterministic in tests; otherwise one is created lazily and owned by this
     instance. Reuse a single provider so the connection pool is shared.
     """
@@ -85,7 +85,7 @@ class LLMProvider:
     def __init__(
         self,
         settings: Settings | None = None,
-        client: httpx.AsyncClient | None = None,
+        client: httpx2.AsyncClient | None = None,
         tracing: Tracing | None = None,
     ) -> None:
         self._settings = settings or get_settings()
@@ -106,9 +106,9 @@ class LLMProvider:
             await self._client.aclose()
             self._client = None
 
-    def _get_client(self) -> httpx.AsyncClient:
+    def _get_client(self) -> httpx2.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+            self._client = httpx2.AsyncClient(timeout=httpx2.Timeout(60.0, connect=5.0))
         return self._client
 
     def _chain(self) -> list[_Target]:
@@ -143,7 +143,7 @@ class LLMProvider:
             payload["max_tokens"] = max_tokens
         return payload
 
-    async def _backoff(self, attempt: int, response: httpx.Response | None) -> None:
+    async def _backoff(self, attempt: int, response: httpx2.Response | None) -> None:
         """Exponential backoff, but never shorter than a server-sent Retry-After."""
         delay = BACKOFF_BASE_SECONDS * (2**attempt)
         if response is not None:
@@ -194,12 +194,12 @@ class LLMProvider:
                 response = await client.post(url, json=payload, headers=self._headers(target))
                 response.raise_for_status()
                 return _extract_content(response)
-            except httpx.HTTPStatusError as exc:
+            except httpx2.HTTPStatusError as exc:
                 if exc.response.status_code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
                     await self._backoff(attempt, exc.response)
                     continue
                 raise _ModelFailed(f"HTTP {exc.response.status_code}") from exc
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx2.TimeoutException, httpx2.TransportError) as exc:
                 if attempt < MAX_RETRIES:
                     await self._backoff(attempt, None)
                     continue
@@ -264,11 +264,11 @@ class LLMProvider:
                         # was emitted.
                         raise _ModelFailed("empty stream")
                     return
-            except httpx.HTTPStatusError as exc:
+            except httpx2.HTTPStatusError as exc:
                 if started:
                     raise
                 raise _ModelFailed(f"HTTP {exc.response.status_code}") from exc
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx2.TimeoutException, httpx2.TransportError) as exc:
                 if started:
                     raise
                 if attempt < MAX_RETRIES:
@@ -277,7 +277,7 @@ class LLMProvider:
                 raise _ModelFailed(str(exc)) from exc
 
 
-def _extract_content(response: httpx.Response) -> str:
+def _extract_content(response: httpx2.Response) -> str:
     """Pull the reply text out of a non-streamed completion. A 200 with an
     unexpected or empty body is treated as a model failure so the chain falls
     back, rather than raising past the fallback logic or returning a dead turn."""
@@ -290,7 +290,7 @@ def _extract_content(response: httpx.Response) -> str:
     return content
 
 
-async def _iter_sse(response: httpx.Response) -> AsyncIterator[str]:
+async def _iter_sse(response: httpx2.Response) -> AsyncIterator[str]:
     """Pull `delta.content` out of an OpenAI-style `data:`-prefixed token stream,
     stopping at the [DONE] sentinel. Malformed lines are skipped, not fatal."""
     async for raw in response.aiter_lines():
