@@ -2,7 +2,7 @@
 #
 # Each issue adds its own dependencies alongside the code that needs them, so a
 # fresh clone always installs a set that is actually exercised: edge-tts +
-# langgraph (#3, #4), sqlalchemy + py-fsrs (#6, Phase 2), llamaindex +
+# langgraph (#3, #4), sqlalchemy + alembic (#6), py-fsrs + llamaindex +
 # qdrant-client (Phase 2). langfuse below is #7 (tracing + prompt management).
 
 fastapi==0.140.0
@@ -12,6 +12,11 @@ httpx==0.28.1
 
 # LLMOps: tracing + prompt management (#7). Pulls in the OpenTelemetry SDK.
 langfuse==4.14.1
+
+# Learner persistence: sessions, error log, immersion hours (#6). Alembic from
+# day one because the schema grows every phase (FSRS + graph tables in Phase 2).
+sqlalchemy==2.0.36
+alembic==1.14.0
 
 # Dev / test
 pytest==9.1.1

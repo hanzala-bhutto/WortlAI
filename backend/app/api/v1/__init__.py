@@ -7,8 +7,11 @@ on purpose - see app/api/health.py.
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/api/v1")
+from app.api.v1 import learner
 
-# Routers are attached here as their issues land:
+router = APIRouter(prefix="/api/v1")
+router.include_router(learner.router)
+
+# Further routers are attached here as their issues land:
 #   from app.api.v1 import session, voice
 #   router.include_router(session.router)
