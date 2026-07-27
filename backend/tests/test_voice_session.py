@@ -138,6 +138,8 @@ async def test_round_trip_start_turn_end(tmp_path):
         types = _types(ws)
         assert types[0] == "ready"
         assert types[-1] == "session_closed"
+        # The debrief endpoint needs this to fetch the right session.
+        assert isinstance(ws.sent[-1]["session_id"], int)
 
         # The opening line is streamed as reply_token chunks before the first
         # turn_done and reconstructs exactly.
@@ -384,6 +386,80 @@ async def test_provider_failure_mid_turn_degrades_without_killing_the_socket(tmp
         # loop ran to the end of the inbox instead of the socket tearing down.
         assert any(m["type"] == "error" and m["stage"] == "tutor" for m in ws.sent)
         assert _types(ws)[-1] == "turn_done"
+    finally:
+        await conn.close()
+
+
+async def test_set_rate_changes_the_rate_of_the_next_turn_only(tmp_path):
+    graph, conn, _ = await build_graph(tmp_path, replies=["Erste.", "Zweite."])
+    try:
+        ws = FakeWS(
+            [
+                up_text(
+                    {"type": "start", "scenario_id": "baeckerei", "thread_id": "t7"}
+                ),
+                up_bytes(b"a"),
+                up_text({"type": "set_rate", "rate": 0.7}),
+                up_bytes(b"b"),
+                up_text({"type": "end"}),
+            ]
+        )
+
+        rates_seen = []
+
+        class RecordingSynth(FakeSynth):
+            async def synth(self, text, *, rate=1.0):
+                rates_seen.append(rate)
+                async for chunk in super().synth(text, rate=rate):
+                    yield chunk
+
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["hallo", "tschuess"]),
+            synthesizer=RecordingSynth(),
+            settings=_settings(),
+        )
+
+        # The opening line (2 sentences) + first reply spoke at the default rate;
+        # only the second reply, spoken after set_rate, used the new one.
+        assert rates_seen == [1.0, 1.0, 1.0, 0.7]
+    finally:
+        await conn.close()
+
+
+async def test_set_rate_with_a_bad_value_is_ignored_not_a_protocol_error(tmp_path):
+    graph, conn, _ = await build_graph(tmp_path, replies=["Antwort."])
+    try:
+        ws = FakeWS(
+            [
+                up_text(
+                    {"type": "start", "scenario_id": "baeckerei", "thread_id": "t8"}
+                ),
+                up_text({"type": "set_rate", "rate": "not-a-number"}),
+                up_bytes(b"a"),
+                up_text({"type": "end"}),
+            ]
+        )
+
+        rates_seen = []
+
+        class RecordingSynth(FakeSynth):
+            async def synth(self, text, *, rate=1.0):
+                rates_seen.append(rate)
+                async for chunk in super().synth(text, rate=rate):
+                    yield chunk
+
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["hallo"]),
+            synthesizer=RecordingSynth(),
+            settings=_settings(),
+        )
+
+        assert not any(m["type"] == "error" for m in ws.sent)
+        assert all(r == 1.0 for r in rates_seen)
     finally:
         await conn.close()
 
