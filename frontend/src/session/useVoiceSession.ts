@@ -1,17 +1,16 @@
 /**
  * The one stateful hook that owns a Talk session: the WebSocket, the mic
- * (MediaRecorder), and the FIFO audio queue. Components stay dumb and read
+ * (MediaRecorder), and the streaming audio sink. Components stay dumb and read
  * `state` (the pure reducer) plus call hold / release / end.
  *
  * All three browser dependencies are injectable so the hook is tested against
- * fakes in the same event loop, with no real socket or mic (mirroring how the
- * backend tests run_voice_session against a scripted fake). The real
- * implementations live in media.ts.
+ * fakes in the same event loop, with no real socket, mic, or MediaSource
+ * (mirroring how the backend tests run_voice_session against a scripted fake).
+ * The real implementations live in media.ts.
  */
 
 import { type MutableRefObject, useCallback, useEffect, useReducer, useRef } from "react";
 
-import { type AudioItem, type AudioQueue, createAudioQueue } from "./audioQueue";
 import { parseDownFrame } from "./frames";
 import { type SessionState, initialState, reducer } from "./reducer";
 
@@ -33,10 +32,21 @@ export interface Recorder {
   dispose(): void;
 }
 
+/**
+ * Where a reply's audio chunks go. A turn's audio arrives as many MP3 fragments
+ * of one stream, so they are pushed in order and played as one continuous sound;
+ * endTurn closes the stream, reset abandons it (session end / new turn).
+ */
+export interface AudioSink {
+  push(dataB64: string, mimetype: string): void;
+  endTurn(): void;
+  reset(): void;
+}
+
 export interface VoiceDeps {
   createSocket(url: string): VoiceSocket;
   createRecorder(): Promise<Recorder>;
-  playAudio(item: AudioItem): Promise<void>;
+  createAudioSink(): AudioSink;
 }
 
 export interface UseVoiceSession {
@@ -81,9 +91,9 @@ export function useVoiceSession(config: VoiceSessionConfig): UseVoiceSession {
   // of leaving recording stuck on forever.
   const holdingRef = useRef(false);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const queueRef = useRef<AudioQueue | null>(null);
-  if (queueRef.current === null) {
-    queueRef.current = createAudioQueue((item) => depsRef.current.playAudio(item));
+  const sinkRef = useRef<AudioSink | null>(null);
+  if (sinkRef.current === null) {
+    sinkRef.current = depsRef.current.createAudioSink();
   }
 
   const disconnect = useCallback(() => {
@@ -92,7 +102,7 @@ export function useVoiceSession(config: VoiceSessionConfig): UseVoiceSession {
     recorderRef.current?.dispose();
     recorderRef.current = null;
     analyserRef.current = null;
-    queueRef.current?.clear();
+    sinkRef.current?.reset();
   }, []);
 
   const connect = useCallback(() => {
@@ -114,10 +124,11 @@ export function useVoiceSession(config: VoiceSessionConfig): UseVoiceSession {
       const frame = parseDownFrame(data);
       if (!frame) return; // a bad frame never tears down the session
       if (frame.type === "audio") {
-        queueRef.current?.enqueue(frame);
+        sinkRef.current?.push(frame.data, frame.mimetype);
         return;
       }
       dispatch({ type: "frame", frame });
+      if (frame.type === "turn_done") sinkRef.current?.endTurn();
       if (frame.type === "session_closed") disconnect();
     });
 
@@ -179,7 +190,6 @@ export function useVoiceSession(config: VoiceSessionConfig): UseVoiceSession {
 
   const end = useCallback(() => {
     socketRef.current?.send(JSON.stringify({ type: "end" }));
-    queueRef.current?.clear();
   }, []);
 
   // Tear everything down when the Talk screen unmounts.

@@ -1,8 +1,16 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AudioItem } from "./audioQueue";
-import { type Recorder, type VoiceSocket, useVoiceSession } from "./useVoiceSession";
+import {
+  type AudioSink,
+  type Recorder,
+  type VoiceSocket,
+  useVoiceSession,
+} from "./useVoiceSession";
+
+function fakeSink(): AudioSink {
+  return { push: vi.fn(), endTurn: vi.fn(), reset: vi.fn() };
+}
 
 function fakeSocket() {
   const h = {
@@ -42,11 +50,11 @@ function setup(overrides?: {
   socket?: ReturnType<typeof fakeSocket>;
   recorder?: Recorder;
   createRecorder?: () => Promise<Recorder>;
-  playAudio?: (item: AudioItem) => Promise<void>;
+  sink?: AudioSink;
 }) {
   const sock = overrides?.socket ?? fakeSocket();
   const recorder = overrides?.recorder ?? fakeRecorder();
-  const playAudio = overrides?.playAudio ?? vi.fn(async () => {});
+  const sink = overrides?.sink ?? fakeSink();
   const hook = renderHook(() =>
     useVoiceSession({
       scenarioId: "bakery",
@@ -54,11 +62,11 @@ function setup(overrides?: {
       deps: {
         createSocket: () => sock.socket,
         createRecorder: overrides?.createRecorder ?? (async () => recorder),
-        playAudio,
+        createAudioSink: () => sink,
       },
     }),
   );
-  return { hook, sock, recorder, playAudio };
+  return { hook, sock, recorder, sink };
 }
 
 describe("useVoiceSession", () => {
@@ -164,9 +172,9 @@ describe("useVoiceSession", () => {
     expect(hook.result.current.state.phase).not.toBe("recording");
   });
 
-  it("plays audio frames instead of putting them in transcript state", async () => {
-    const playAudio = vi.fn(async () => {});
-    const { hook, sock } = setup({ playAudio });
+  it("streams audio frames to the sink instead of transcript state", () => {
+    const sink = fakeSink();
+    const { hook, sock } = setup({ sink });
     act(() => hook.result.current.connect());
     act(() => sock.fireOpen());
 
@@ -175,13 +183,12 @@ describe("useVoiceSession", () => {
         '{"type":"audio","seq":0,"mimetype":"audio/mpeg","data":"AAAA"}',
       ),
     );
-
-    await vi.waitFor(() =>
-      expect(playAudio).toHaveBeenCalledWith(
-        expect.objectContaining({ seq: 0, data: "AAAA" }),
-      ),
-    );
+    expect(sink.push).toHaveBeenCalledWith("AAAA", "audio/mpeg");
     expect(hook.result.current.state.turns).toHaveLength(0);
+
+    // turn_done closes the audio stream so the reply plays to its end.
+    act(() => sock.fireMessage('{"type":"turn_done"}'));
+    expect(sink.endTurn).toHaveBeenCalledOnce();
   });
 
   it("surfaces an error frame without closing the session", () => {
