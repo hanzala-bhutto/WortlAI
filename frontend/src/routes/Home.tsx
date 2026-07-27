@@ -1,10 +1,12 @@
+import { Link } from "@tanstack/react-router";
+
 import { SystemStatus } from "../components/SystemStatus";
 
 const MODES = [
-  { name: "Talk", note: "Voice conversation loop - Phase 1" },
-  { name: "Review", note: "Chunk-based FSRS deck - Phase 2" },
-  { name: "Dashboard", note: "Immersion hours - Phase 3" },
-];
+  { name: "Talk", note: "Voice conversation loop - Phase 1", to: "/talk" },
+  { name: "Review", note: "Chunk-based FSRS deck - Phase 2", to: undefined },
+  { name: "Dashboard", note: "Immersion hours - Phase 3", to: undefined },
+] as const;
 
 export function Home() {
   return (
@@ -24,15 +26,30 @@ export function Home() {
           Modes
         </h2>
         <ul className="space-y-2 text-sm">
-          {MODES.map((mode) => (
-            <li
-              key={mode.name}
-              className="flex items-baseline gap-3 rounded-lg border border-dashed border-black/10 px-4 py-3 dark:border-white/15"
-            >
-              <span className="font-medium">{mode.name}</span>
-              <span className="ml-auto text-xs opacity-60">{mode.note}</span>
-            </li>
-          ))}
+          {MODES.map((mode) => {
+            const row = (
+              <>
+                <span className="font-medium">{mode.name}</span>
+                <span className="ml-auto text-xs opacity-60">{mode.note}</span>
+              </>
+            );
+            return (
+              <li key={mode.name}>
+                {mode.to ? (
+                  <Link
+                    to={mode.to}
+                    className="flex items-baseline gap-3 rounded-lg border border-dashed border-black/10 px-4 py-3 transition-colors hover:border-solid hover:border-black/25 dark:border-white/15 dark:hover:border-white/30"
+                  >
+                    {row}
+                  </Link>
+                ) : (
+                  <div className="flex items-baseline gap-3 rounded-lg border border-dashed border-black/10 px-4 py-3 opacity-60 dark:border-white/15">
+                    {row}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
     </main>
