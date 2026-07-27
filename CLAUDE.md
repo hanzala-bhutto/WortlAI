@@ -87,6 +87,7 @@ Keep each one concrete enough to test.
 - Single service: `npm run build`, then run uvicorn alone. Whole app at :8000.
 - Ports: backend 8000, frontend dev 3001, Qdrant 6333, Langfuse 3000.
 - Tests: `pytest` in `backend/`, `npm test` in `frontend/`.
+- Lint/format (backend): `ruff check .` and `ruff format .` in `backend/` (config in `backend/pyproject.toml`). Run `pre-commit install` once so the ruff hook lint-fixes and formats staged Python on every commit.
 - Env: copy `.env.example` to `.env`. A missing value stops startup.
 - Skills: `/dev`, `/ingest`, `/eval`, `/new-scenario`, `/graph-check`, `/progress`.
 

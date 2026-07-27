@@ -38,3 +38,7 @@ alembic==1.14.0
 # Dev / test
 pytest==9.1.1
 pytest-asyncio==1.4.0
+# Lint + format (#47). ruff owns both; pre-commit runs it on every commit. Config
+# lives in pyproject.toml [tool.ruff]; see .pre-commit-config.yaml at the repo root.
+ruff==0.16.0
+pre-commit==4.6.1

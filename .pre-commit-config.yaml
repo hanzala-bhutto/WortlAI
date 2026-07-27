@@ -1,0 +1,17 @@
+# Local commit gate for the backend (#47). Install once with `pre-commit install`
+# (from the repo root, in the backend venv). ruff finds its config by walking up to
+# backend/pyproject.toml, so both hooks below are scoped to backend/.
+#
+# No CI runs yet, so this hook is the enforcement point: it lint-fixes and formats
+# staged Python before the commit lands.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff
+        name: ruff (lint + autofix)
+        args: [--fix]
+        files: ^backend/.*\.py$
+      - id: ruff-format
+        name: ruff (format)
+        files: ^backend/.*\.py$
