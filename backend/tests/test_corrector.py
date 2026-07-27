@@ -16,8 +16,6 @@ network is touched and the behaviour described is ours, not the model's.
 
 from types import SimpleNamespace
 
-import pytest
-
 from app.agents.corrector import (
     Corrector,
     ErrorReport,

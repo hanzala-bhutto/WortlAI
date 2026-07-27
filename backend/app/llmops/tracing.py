@@ -8,8 +8,8 @@ exception the caller sees. Agents and the provider wrap their LLM calls in
 """
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 logger = logging.getLogger(__name__)
 

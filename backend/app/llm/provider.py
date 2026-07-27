@@ -18,6 +18,7 @@ Behaviour that the rest of the app relies on:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -166,10 +167,8 @@ class LLMProvider:
         if response is not None:
             retry_after = response.headers.get("retry-after")
             if retry_after:
-                try:
+                with contextlib.suppress(ValueError):
                     delay = max(delay, float(retry_after))
-                except ValueError:
-                    pass
         await asyncio.sleep(delay)
 
     async def complete(

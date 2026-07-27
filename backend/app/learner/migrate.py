@@ -7,8 +7,9 @@ manual `alembic upgrade`. Alembic is still the source of truth - this just runs
 
 from pathlib import Path
 
-from alembic import command
 from alembic.config import Config
+
+from alembic import command
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = BACKEND_DIR / "alembic.ini"

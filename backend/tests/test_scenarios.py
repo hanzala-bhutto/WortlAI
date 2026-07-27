@@ -7,11 +7,12 @@ contract that matters is: every scenario is well formed, ids are unique, and an
 unknown id fails loudly rather than starting a session with no persona.
 """
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from app.agents.scenarios import (
     CEFR_LEVELS,
-    Scenario,
     get_scenario,
     list_scenarios,
 )
@@ -58,7 +59,7 @@ def test_get_unknown_scenario_raises():
 
 def test_scenario_is_immutable():
     s = list_scenarios()[0]
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         s.level = "C2"  # frozen dataclass
 
 

@@ -10,8 +10,6 @@ The two properties that make the staged-correction design hold, pinned here:
 
 import asyncio
 
-import pytest
-
 from app.agents.corrector import CorrectorCollector, ErrorReport
 
 

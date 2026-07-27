@@ -16,8 +16,6 @@ network is touched and the behaviour described is ours, not the model's.
 
 from types import SimpleNamespace
 
-import pytest
-
 from app.agents.scenarios import get_scenario
 from app.agents.tutor import Tutor, english_drift, reply_is_acceptable
 from app.llmops.prompts import PromptStore

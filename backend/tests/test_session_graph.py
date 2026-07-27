@@ -14,7 +14,6 @@ import asyncio
 from types import SimpleNamespace
 
 import aiosqlite
-import pytest
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sqlalchemy.orm import sessionmaker
 
@@ -136,7 +135,6 @@ async def test_three_turn_conversation_accumulates_messages(tmp_path):
 
 async def test_each_turn_sees_the_growing_history(tmp_path):
     app, conn, _ = await build_app(tmp_path, replies=["r1", "r2", "r3"])
-    tutor = None
     try:
         await app.ainvoke({"scenario_id": "nachbar"}, cfg())
         for utterance in ("u1", "u2", "u3"):
