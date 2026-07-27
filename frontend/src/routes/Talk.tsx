@@ -322,7 +322,7 @@ function ScenarioPicker({
 }) {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-10">
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         <p className="font-mono text-[11px] font-bold tracking-widest text-soft uppercase">
           Szenario waehlen
         </p>
@@ -332,25 +332,25 @@ function ScenarioPicker({
 
         {isLoading && <p className="mt-6 text-soft">Szenarien werden geladen ...</p>}
 
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {scenarios?.map((s) => (
             <button
               key={s.id}
               type="button"
               onClick={() => onSelect(s.id)}
-              className="cursor-pointer rounded-clay bg-surface p-5 text-left shadow-clay-sm transition-[transform,box-shadow] duration-100 hover:-translate-y-0.5 hover:brightness-105 active:translate-y-0.5 active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+              className="cursor-pointer rounded-clay border border-line bg-surface p-5 text-left shadow-clay transition-[transform,box-shadow] duration-100 hover:-translate-y-0.5 hover:brightness-105 active:translate-y-0.5 active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
             >
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-extrabold text-head">{s.title}</h2>
-                <span className="rounded-full bg-sunk px-3 py-1 font-mono text-xs font-bold text-brand shadow-clay-in">
+                <span className="rounded-full bg-brand/15 px-3 py-1 font-mono text-xs font-bold text-brand">
                   {s.level}
                 </span>
               </div>
-              <ul className="mt-3 flex flex-wrap gap-1.5">
+              <ul className="mt-3.5 flex flex-wrap gap-1.5">
                 {s.redemittel.slice(0, 3).map((chunk) => (
                   <li
                     key={chunk}
-                    className="rounded-full bg-sunk px-2.5 py-1 text-xs font-semibold text-soft shadow-clay-in"
+                    className="rounded-full bg-line px-2.5 py-1 text-xs font-semibold text-ink"
                   >
                     {chunk}
                   </li>
