@@ -41,6 +41,9 @@ export interface AudioSink {
   push(dataB64: string, mimetype: string): void;
   endTurn(): void;
   reset(): void;
+  /** Replay the last completed turn's audio at a given rate ("Wie bitte?"). A
+   * no-op if no turn has completed yet. */
+  replayLast(rate: number): void;
 }
 
 export interface VoiceDeps {
@@ -59,6 +62,10 @@ export interface UseVoiceSession {
   release(): Promise<void>;
   /** Ask the server to close and produce the debrief. */
   end(): void;
+  /** Change the TTS speed (Sprechtempo); applies from the next spoken sentence on. */
+  setRate(rate: number): void;
+  /** "Wie bitte?": replay the last tutor reply at 0.7x. */
+  replayLast(): void;
   /** Live mic analyser for the waveform; null when not recording. */
   analyserRef: MutableRefObject<AnalyserNode | null>;
 }
@@ -192,8 +199,16 @@ export function useVoiceSession(config: VoiceSessionConfig): UseVoiceSession {
     socketRef.current?.send(JSON.stringify({ type: "end" }));
   }, []);
 
+  const setRate = useCallback((rate: number) => {
+    socketRef.current?.send(JSON.stringify({ type: "set_rate", rate }));
+  }, []);
+
+  const replayLast = useCallback(() => {
+    sinkRef.current?.replayLast(0.7);
+  }, []);
+
   // Tear everything down when the Talk screen unmounts.
   useEffect(() => disconnect, [disconnect]);
 
-  return { state, connect, hold, release, end, analyserRef };
+  return { state, connect, hold, release, end, setRate, replayLast, analyserRef };
 }

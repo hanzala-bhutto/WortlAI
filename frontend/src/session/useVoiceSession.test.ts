@@ -9,7 +9,7 @@ import {
 } from "./useVoiceSession";
 
 function fakeSink(): AudioSink {
-  return { push: vi.fn(), endTurn: vi.fn(), reset: vi.fn() };
+  return { push: vi.fn(), endTurn: vi.fn(), reset: vi.fn(), replayLast: vi.fn() };
 }
 
 function fakeSocket() {
@@ -212,6 +212,27 @@ describe("useVoiceSession", () => {
     act(() => sock.fireOpen());
     expect(() => act(() => sock.fireMessage("garbage{"))).not.toThrow();
     expect(hook.result.current.state.turns).toHaveLength(0);
+  });
+
+  it("sends a set_rate frame when the speed slider changes", () => {
+    const { hook, sock } = setup();
+    act(() => hook.result.current.connect());
+    act(() => sock.fireOpen());
+    sock.sent.length = 0; // ignore the start frame
+
+    act(() => hook.result.current.setRate(0.7));
+    expect(sock.sent).toHaveLength(1);
+    expect(JSON.parse(sock.sent[0] as string)).toEqual({
+      type: "set_rate",
+      rate: 0.7,
+    });
+  });
+
+  it("replays the last reply at 0.7x on Wie bitte?", () => {
+    const sink = fakeSink();
+    const { hook } = setup({ sink });
+    act(() => hook.result.current.replayLast());
+    expect(sink.replayLast).toHaveBeenCalledWith(0.7);
   });
 
   it("reports a dropped connection as a degraded error", () => {

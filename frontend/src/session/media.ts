@@ -110,6 +110,14 @@ function createMseAudioPlayer(): AudioSink {
   const pending: Uint8Array<ArrayBuffer>[] = [];
   let ended = false;
 
+  // Every chunk of the turn in progress, kept alongside `pending` (which is
+  // drained into the SourceBuffer) so a completed turn's audio survives for
+  // "Wie bitte?" replay after the MediaSource itself has moved on.
+  let currentChunks: Uint8Array<ArrayBuffer>[] = [];
+  let lastReplyChunks: Uint8Array<ArrayBuffer>[] = [];
+  let replayAudio: HTMLAudioElement | null = null;
+  let replayUrl: string | null = null;
+
   const supported =
     typeof MediaSource !== "undefined" && MediaSource.isTypeSupported("audio/mpeg");
 
@@ -126,6 +134,7 @@ function createMseAudioPlayer(): AudioSink {
     objectUrl = null;
     pending.length = 0;
     ended = false;
+    currentChunks = [];
   }
 
   function pump() {
@@ -169,15 +178,39 @@ function createMseAudioPlayer(): AudioSink {
     push(dataB64: string) {
       if (!supported) return;
       if (!mediaSource || ended) begin(); // first chunk of a new turn
-      pending.push(base64ToBytes(dataB64));
+      const bytes = base64ToBytes(dataB64);
+      pending.push(bytes);
+      currentChunks.push(bytes);
       pump();
     },
     endTurn() {
       ended = true;
       pump();
+      if (currentChunks.length > 0) lastReplyChunks = currentChunks;
     },
     reset() {
       teardown();
+      if (replayAudio) {
+        replayAudio.pause();
+        replayAudio.removeAttribute("src");
+        replayAudio = null;
+      }
+      if (replayUrl) URL.revokeObjectURL(replayUrl);
+      replayUrl = null;
+      lastReplyChunks = [];
+    },
+    replayLast(rate: number) {
+      if (lastReplyChunks.length === 0) return;
+      if (replayAudio) {
+        replayAudio.pause();
+        replayAudio.removeAttribute("src");
+      }
+      if (replayUrl) URL.revokeObjectURL(replayUrl);
+      const blob = new Blob(lastReplyChunks, { type: "audio/mpeg" });
+      replayUrl = URL.createObjectURL(blob);
+      replayAudio = new Audio(replayUrl);
+      replayAudio.playbackRate = rate;
+      void replayAudio.play().catch(() => {});
     },
   };
 }

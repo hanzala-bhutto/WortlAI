@@ -2,12 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { MicButton } from "../components/talk/MicButton";
-import { type ScenarioSummary, api } from "../lib/api";
+import { type ErrorEntry, type ScenarioSummary, api } from "../lib/api";
 import { realDeps, voiceUrl } from "../session/media";
 import type { Phase, Turn } from "../session/reducer";
 import { useVoiceSession } from "../session/useVoiceSession";
 
-/** German chrome; the conversation itself is German, glosses land in PR2. */
+/** German chrome; the conversation itself is German. Tap-to-gloss needs the
+ * lexical graph (Phase 2), so it is deferred rather than stubbed. */
 const MIC_LABEL: Record<Phase, string> = {
   listening: "Halten zum Sprechen",
   recording: "Aufnahme laeuft ... loslassen zum Senden",
@@ -21,8 +22,10 @@ export function Talk() {
     queryFn: api.scenarios,
     staleTime: Infinity,
   });
-  // PR1 auto-starts the first scenario; the picker is PR2.
-  const scenario = scenarios.data?.[0];
+  // Scenario is fixed for the WS lifetime (level/persona pin the session), so the
+  // picker runs once before connect, not a switch mid-conversation.
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
+  const scenario = scenarios.data?.find((s) => s.id === selectedScenarioId);
 
   const session = useVoiceSession({
     scenarioId: scenario?.id ?? "",
@@ -30,7 +33,8 @@ export function Talk() {
     socketUrl: voiceUrl(),
     realDeps,
   });
-  const { state, connect, hold, release, end } = session;
+  const { state, connect, hold, release, end, setRate, replayLast } = session;
+  const hasReply = state.turns.some((t) => t.role === "tutor");
 
   useEffect(() => {
     if (scenario) connect();
@@ -79,6 +83,18 @@ export function Talk() {
             </p>
           </div>
         </div>
+      </Shell>
+    );
+  }
+
+  if (!scenario) {
+    return (
+      <Shell>
+        <ScenarioPicker
+          scenarios={scenarios.data}
+          isLoading={scenarios.isLoading}
+          onSelect={setSelectedScenarioId}
+        />
       </Shell>
     );
   }
@@ -132,7 +148,21 @@ export function Talk() {
                     ? "Session beendet"
                     : MIC_LABEL[state.phase]}
                 </span>
+                <button
+                  type="button"
+                  onClick={replayLast}
+                  disabled={!hasReply || state.status !== "ready"}
+                  className="cursor-pointer rounded-xl bg-surface px-3.5 py-1.5 text-xs font-bold text-soft shadow-clay-sm transition-[transform,box-shadow] duration-100 enabled:hover:-translate-y-0.5 enabled:hover:text-head enabled:active:translate-y-0.5 enabled:active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Wie bitte? (0.7x)
+                </button>
               </div>
+
+              <RateSlider
+                disabled={state.status !== "ready"}
+                onChange={setRate}
+                className="absolute left-0"
+              />
 
               <button
                 type="button"
@@ -149,7 +179,188 @@ export function Talk() {
         {/* Desktop-only info panel: what this scenario practises */}
         {scenario && <SidePanel scenario={scenario} />}
       </div>
+
+      {state.status === "closed" && state.debriefSessionId !== null && (
+        <DebriefSheet sessionId={state.debriefSessionId} />
+      )}
     </Shell>
+  );
+}
+
+function DebriefSheet({ sessionId }: { sessionId: number }) {
+  const debrief = useQuery({
+    queryKey: ["session-debrief", sessionId],
+    queryFn: () => api.sessionDebrief(sessionId),
+  });
+
+  return (
+    <div className="fixed inset-0 z-20 grid place-items-center bg-ink/40 p-6 backdrop-blur-sm">
+      <div className="flex max-h-[80vh] w-full max-w-lg flex-col gap-5 rounded-clay bg-surface p-7 shadow-clay">
+        <div>
+          <p className="font-mono text-[11px] font-bold tracking-widest text-soft uppercase">
+            Debrief
+          </p>
+          <h2 className="mt-1 text-2xl font-extrabold text-head">Session beendet</h2>
+        </div>
+
+        {debrief.isLoading && <p className="text-soft">Debrief wird geladen ...</p>}
+        {debrief.isError && (
+          <p className="text-again">Debrief konnte nicht geladen werden.</p>
+        )}
+
+        {debrief.data && (
+          <>
+            <p className="text-sm font-semibold text-soft">
+              Dauer: {formatDuration(debrief.data.duration_seconds)}
+            </p>
+
+            {debrief.data.errors.length === 0 ? (
+              <p className="rounded-xl bg-sunk px-4 py-3 text-sm font-medium text-soft shadow-clay-in">
+                Keine Fehler erkannt. Gut gemacht!
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-3 overflow-y-auto">
+                {debrief.data.errors.map((error) => (
+                  <ErrorCard key={error.id} error={error} />
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-auto cursor-pointer rounded-2xl bg-gradient-to-br from-brand to-pink px-5 py-3 text-sm font-extrabold text-white shadow-clay-sm transition-[transform,box-shadow] duration-100 hover:-translate-y-0.5 active:translate-y-0.5 active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+        >
+          Neue Session starten
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ErrorCard({ error }: { error: ErrorEntry }) {
+  return (
+    <li className="rounded-xl bg-sunk px-4 py-3 shadow-clay-in">
+      <p className="font-mono text-[10px] font-bold tracking-widest text-soft uppercase">
+        {error.error_type}
+      </p>
+      <p className="mt-1.5 text-sm text-again line-through decoration-2">
+        {error.utterance}
+      </p>
+      <p className="mt-1 text-sm font-semibold text-head">{error.correction}</p>
+      {error.explanation && (
+        <p className="mt-1.5 text-xs text-soft">{error.explanation}</p>
+      )}
+    </li>
+  );
+}
+
+/** mm:ss, or a placeholder while the session is still open (should not happen
+ * here - the sheet only renders once session_closed has fired). */
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "-";
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${minutes}:${rest.toString().padStart(2, "0")}`;
+}
+
+/** Mirrors backend/app/config.py: voice_rate_min/default/max. */
+const RATE_MIN = 0.7;
+const RATE_MAX = 1.2;
+const RATE_DEFAULT = 1.0;
+
+/** Sprechtempo slider. Sends set_rate on every change; cheap enough to not
+ * debounce, and the backend applies it from the next spoken sentence on. */
+function RateSlider({
+  disabled,
+  onChange,
+  className = "",
+}: {
+  disabled: boolean;
+  onChange: (rate: number) => void;
+  className?: string;
+}) {
+  const [rate, setRate] = useState(RATE_DEFAULT);
+
+  return (
+    <div className={`flex items-center gap-2.5 ${className}`}>
+      <span className="font-mono text-xs font-bold text-soft" aria-hidden>
+        🐢
+      </span>
+      <input
+        type="range"
+        aria-label="Sprechtempo"
+        min={RATE_MIN}
+        max={RATE_MAX}
+        step={0.05}
+        value={rate}
+        disabled={disabled}
+        onChange={(e) => {
+          const value = Number(e.target.value);
+          setRate(value);
+          onChange(value);
+        }}
+        className="h-1.5 w-24 cursor-pointer appearance-none rounded-full bg-sunk shadow-clay-in accent-brand disabled:cursor-not-allowed disabled:opacity-40"
+      />
+      <span className="font-mono text-xs font-bold text-soft" aria-hidden>
+        🐇
+      </span>
+    </div>
+  );
+}
+
+function ScenarioPicker({
+  scenarios,
+  isLoading,
+  onSelect,
+}: {
+  scenarios: ScenarioSummary[] | undefined;
+  isLoading: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-10">
+      <div className="mx-auto max-w-3xl">
+        <p className="font-mono text-[11px] font-bold tracking-widest text-soft uppercase">
+          Szenario waehlen
+        </p>
+        <h1 className="mt-1 text-2xl font-extrabold text-head">
+          Womit moechtest du ueben?
+        </h1>
+
+        {isLoading && <p className="mt-6 text-soft">Szenarien werden geladen ...</p>}
+
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {scenarios?.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => onSelect(s.id)}
+              className="cursor-pointer rounded-clay bg-surface p-5 text-left shadow-clay-sm transition-[transform,box-shadow] duration-100 hover:-translate-y-0.5 hover:brightness-105 active:translate-y-0.5 active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-extrabold text-head">{s.title}</h2>
+                <span className="rounded-full bg-sunk px-3 py-1 font-mono text-xs font-bold text-brand shadow-clay-in">
+                  {s.level}
+                </span>
+              </div>
+              <ul className="mt-3 flex flex-wrap gap-1.5">
+                {s.redemittel.slice(0, 3).map((chunk) => (
+                  <li
+                    key={chunk}
+                    className="rounded-full bg-sunk px-2.5 py-1 text-xs font-semibold text-soft shadow-clay-in"
+                  >
+                    {chunk}
+                  </li>
+                ))}
+              </ul>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

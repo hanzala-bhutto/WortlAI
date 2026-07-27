@@ -17,6 +17,7 @@ export type UpFrame =
       thread_id?: string;
       rate?: number;
     }
+  | { type: "set_rate"; rate: number }
   | { type: "end" };
 
 /** Frames the server sends down. */
@@ -27,7 +28,7 @@ export type DownFrame =
   | { type: "audio"; seq: number; mimetype: string; data: string }
   | { type: "turn_done" }
   | { type: "error"; stage: string; message: string }
-  | { type: "session_closed" };
+  | { type: "session_closed"; session_id: number | null };
 
 function isString(v: unknown): v is string {
   return typeof v === "string";
@@ -72,7 +73,10 @@ export function parseDownFrame(raw: string): DownFrame | null {
         ? { type: "error", stage: f.stage, message: f.message }
         : null;
     case "session_closed":
-      return { type: "session_closed" };
+      return {
+        type: "session_closed",
+        session_id: typeof f.session_id === "number" ? f.session_id : null,
+      };
     default:
       return null;
   }

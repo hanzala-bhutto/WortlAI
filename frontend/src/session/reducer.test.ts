@@ -94,9 +94,10 @@ describe("session reducer", () => {
     expect(state.phase).toBe("listening");
   });
 
-  it("closes on session_closed", () => {
-    const state = run(frame({ type: "session_closed" }));
+  it("closes on session_closed and records the debrief session id", () => {
+    const state = run(frame({ type: "session_closed", session_id: 7 }));
     expect(state.status).toBe("closed");
+    expect(state.debriefSessionId).toBe(7);
   });
 
   it("gives every turn a distinct id", () => {

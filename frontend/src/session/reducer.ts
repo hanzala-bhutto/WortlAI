@@ -38,6 +38,9 @@ export interface SessionState {
   error: { stage: string; message: string } | null;
   /** Monotonic id source, kept in state so the reducer stays deterministic. */
   nextId: number;
+  /** The learner-store session id, set when the server closes the session; the
+   * Talk screen fetches the debrief with it. */
+  debriefSessionId: number | null;
 }
 
 export const initialState: SessionState = {
@@ -48,6 +51,7 @@ export const initialState: SessionState = {
   turns: [],
   error: null,
   nextId: 0,
+  debriefSessionId: null,
 };
 
 export type Action =
@@ -119,7 +123,12 @@ function applyFrame(state: SessionState, frame: DownFrame): SessionState {
       };
 
     case "session_closed":
-      return { ...state, status: "closed", phase: "listening" };
+      return {
+        ...state,
+        status: "closed",
+        phase: "listening",
+        debriefSessionId: frame.session_id,
+      };
 
     case "audio":
       // Audio is played by the queue side-effect, not held in reducer state.
