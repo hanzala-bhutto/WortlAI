@@ -90,13 +90,21 @@ async def run_voice_session(
 
             if kind == "start":
                 scenario_id = control.get("scenario_id")
-                if not isinstance(scenario_id, str) or not _scenario_exists(scenario_id):
-                    await _protocol_error(ws, f"unknown or missing scenario {scenario_id!r}")
+                if not isinstance(scenario_id, str) or not _scenario_exists(
+                    scenario_id
+                ):
+                    await _protocol_error(
+                        ws, f"unknown or missing scenario {scenario_id!r}"
+                    )
                     continue
                 thread_id = control.get("thread_id") or uuid4().hex
                 rate = _coerce_rate(control.get("rate"), settings.voice_rate_default)
                 await ws.send_json(
-                    {"type": "ready", "thread_id": thread_id, "scenario_id": scenario_id}
+                    {
+                        "type": "ready",
+                        "thread_id": thread_id,
+                        "scenario_id": scenario_id,
+                    }
                 )
                 # Reconnecting to a thread that already has a session: just resume,
                 # don't re-run setup - that would replay the opening line and, worse,
@@ -128,7 +136,11 @@ async def run_voice_session(
                 continue
             if turns >= settings.voice_max_turns:
                 await ws.send_json(
-                    {"type": "error", "stage": "limit", "message": "session turn limit reached"}
+                    {
+                        "type": "error",
+                        "stage": "limit",
+                        "message": "session turn limit reached",
+                    }
                 )
                 await ws.send_json({"type": "session_closed"})
                 return
@@ -136,7 +148,9 @@ async def run_voice_session(
             try:
                 transcript = await transcriber.transcribe(audio)
             except STTError as exc:
-                await ws.send_json({"type": "error", "stage": "stt", "message": str(exc)})
+                await ws.send_json(
+                    {"type": "error", "stage": "stt", "message": str(exc)}
+                )
                 continue
             if not transcript:
                 await ws.send_json(
@@ -145,9 +159,16 @@ async def run_voice_session(
                 continue
 
             turns += 1
-            await ws.send_json({"type": "transcript", "role": "user", "text": transcript})
+            await ws.send_json(
+                {"type": "transcript", "role": "user", "text": transcript}
+            )
             await _drive_turn(
-                ws, graph, _cfg(thread_id), {"user_input": transcript}, synthesizer, rate
+                ws,
+                graph,
+                _cfg(thread_id),
+                {"user_input": transcript},
+                synthesizer,
+                rate,
             )
 
 
@@ -206,7 +227,11 @@ async def _drive_turn(
     except Exception:
         logger.exception("turn failed while driving the graph")
         await ws.send_json(
-            {"type": "error", "stage": "tutor", "message": "reply failed, please try again"}
+            {
+                "type": "error",
+                "stage": "tutor",
+                "message": "reply failed, please try again",
+            }
         )
     await ws.send_json({"type": "turn_done"})
 

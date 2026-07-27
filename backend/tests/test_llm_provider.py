@@ -36,7 +36,8 @@ def make_settings(*, groq_key="gk", nim_key="nk"):
 
 def chat_response(content: str) -> httpx2.Response:
     return httpx2.Response(
-        200, json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}
+        200,
+        json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]},
     )
 
 
@@ -74,6 +75,7 @@ MESSAGES = [{"role": "user", "content": "Hallo"}]
 def _no_real_sleep(monkeypatch):
     """Backoff waits must not slow the suite; assert they were requested, don't
     actually sleep."""
+
     async def instant(_seconds):
         return None
 
@@ -146,9 +148,7 @@ async def test_all_providers_failing_raises_provider_error():
 
 
 async def test_no_configured_provider_raises_rather_than_hanging():
-    provider, _ = provider_with(
-        {}, settings=make_settings(groq_key="", nim_key="")
-    )
+    provider, _ = provider_with({}, settings=make_settings(groq_key="", nim_key=""))
 
     with pytest.raises(ProviderError):
         await provider.complete(MESSAGES)

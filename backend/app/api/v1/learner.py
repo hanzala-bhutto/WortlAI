@@ -26,7 +26,9 @@ class LogHoursRequest(BaseModel):
     )
     minutes: int = Field(gt=0, le=600, description="Minutes of German, 1-600.")
     note: str | None = Field(
-        default=None, max_length=280, description="Optional context, e.g. 'Termin beim Arzt'."
+        default=None,
+        max_length=280,
+        description="Optional context, e.g. 'Termin beim Arzt'.",
     )
 
 
@@ -47,7 +49,9 @@ class ImmersionLogEntry(BaseModel):
     status_code=201,
     summary="Log a block of immersion time",
 )
-def log_hours(body: LogHoursRequest, db: DbSession = Depends(get_db)) -> ImmersionLogEntry:
+def log_hours(
+    body: LogHoursRequest, db: DbSession = Depends(get_db)
+) -> ImmersionLogEntry:
     entry = ImmersionLog(source=body.source, minutes=body.minutes, note=body.note)
     db.add(entry)
     db.commit()

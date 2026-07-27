@@ -12,7 +12,11 @@ from app.voice.tts import EdgeTTS, TTSError, rate_to_percent, split_sentences
 
 
 def test_split_sentences_separates_on_terminators():
-    assert split_sentences("Hallo. Wie geht's? Gut!") == ["Hallo.", "Wie geht's?", "Gut!"]
+    assert split_sentences("Hallo. Wie geht's? Gut!") == [
+        "Hallo.",
+        "Wie geht's?",
+        "Gut!",
+    ]
 
 
 def test_split_sentences_keeps_a_trailing_fragment():

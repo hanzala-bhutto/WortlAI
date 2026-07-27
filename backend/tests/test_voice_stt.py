@@ -38,7 +38,9 @@ async def test_transcribe_returns_trimmed_german_text():
         captured["body"] = request.content
         return httpx2.Response(200, json={"text": "  Guten Tag  "})
 
-    text = await transcriber_with(handler).transcribe(b"opus-bytes", mimetype="audio/webm")
+    text = await transcriber_with(handler).transcribe(
+        b"opus-bytes", mimetype="audio/webm"
+    )
 
     assert text == "Guten Tag"
     assert captured["url"].endswith("/audio/transcriptions")
@@ -50,7 +52,9 @@ async def test_transcribe_returns_trimmed_german_text():
 
 async def test_http_error_becomes_stterror():
     with pytest.raises(STTError):
-        await transcriber_with(lambda r: httpx2.Response(429, json={"e": "rate"})).transcribe(b"a")
+        await transcriber_with(
+            lambda r: httpx2.Response(429, json={"e": "rate"})
+        ).transcribe(b"a")
 
 
 async def test_transport_error_becomes_stterror():
@@ -76,7 +80,9 @@ async def test_oversize_audio_is_rejected_before_the_network():
 
 async def test_empty_audio_is_rejected():
     with pytest.raises(STTError):
-        await transcriber_with(lambda r: httpx2.Response(200, json={"text": "x"})).transcribe(b"")
+        await transcriber_with(
+            lambda r: httpx2.Response(200, json={"text": "x"})
+        ).transcribe(b"")
 
 
 async def test_missing_key_is_stterror_not_a_live_401():
@@ -90,11 +96,15 @@ async def test_missing_key_is_stterror_not_a_live_401():
 
 async def test_malformed_body_is_stterror():
     with pytest.raises(STTError):
-        await transcriber_with(lambda r: httpx2.Response(200, json={"nope": 1})).transcribe(b"a")
+        await transcriber_with(
+            lambda r: httpx2.Response(200, json={"nope": 1})
+        ).transcribe(b"a")
 
 
 async def test_silence_transcribes_to_empty_string_not_an_error():
     # A silent utterance is a normal degraded state, not a failure: the loop prompts
     # the user to speak again rather than surfacing an error.
-    text = await transcriber_with(lambda r: httpx2.Response(200, json={"text": "   "})).transcribe(b"a")
+    text = await transcriber_with(
+        lambda r: httpx2.Response(200, json={"text": "   "})
+    ).transcribe(b"a")
     assert text == ""

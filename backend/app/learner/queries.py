@@ -37,7 +37,9 @@ def hours_per_day(db: DbSession, since: datetime | None = None) -> list[DayMinut
     )
     if since is not None:
         stmt = stmt.where(ImmersionLog.created_at >= since)
-    return [DayMinutes(day=row.day, minutes=int(row.minutes)) for row in db.execute(stmt)]
+    return [
+        DayMinutes(day=row.day, minutes=int(row.minutes)) for row in db.execute(stmt)
+    ]
 
 
 def error_counts_by_type(

@@ -32,9 +32,7 @@ class SessionWriter:
     """Persists session lifecycle events. Takes a session factory so a test can
     point it at a temp DB; defaults to the app's learner store."""
 
-    def __init__(
-        self, session_factory: Callable[[], DbSession] = SessionLocal
-    ) -> None:
+    def __init__(self, session_factory: Callable[[], DbSession] = SessionLocal) -> None:
         self._session_factory = session_factory
 
     @contextmanager

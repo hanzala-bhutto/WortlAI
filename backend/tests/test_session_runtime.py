@@ -36,6 +36,7 @@ async def test_aclose_is_safe_and_releases_the_connection(tmp_path):
     await runtime.aclose()
 
     # The checkpointer connection is closed: using it now raises, which is how we
-    # know aclose actually released it rather than just returning.
-    with pytest.raises(Exception):
+    # know aclose actually released it rather than just returning. The exact type is
+    # an aiosqlite/sqlite implementation detail, so any raise is the signal here.
+    with pytest.raises(Exception):  # noqa: B017
         await runtime._conn.execute("select 1")

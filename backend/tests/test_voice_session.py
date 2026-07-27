@@ -148,15 +148,22 @@ async def test_round_trip_start_turn_end(tmp_path):
         assert opening == get_scenario("cafe").opening_line
 
         # The user's transcript is echoed back.
-        assert {"type": "transcript", "role": "user", "text": "Einen Kaffee bitte"} in ws.sent
+        assert {
+            "type": "transcript",
+            "role": "user",
+            "text": "Einen Kaffee bitte",
+        } in ws.sent
 
         # The reply's two sentences are spoken as two separate audio frames, in order,
         # not one blob after the whole reply.
-        after_transcript = ws.sent[types.index("transcript"):]
+        after_transcript = ws.sent[types.index("transcript") :]
         reply_audio = [m for m in after_transcript if m["type"] == "audio"]
         assert len(reply_audio) == 2
         spoken = [base64.b64decode(m["data"]).decode("utf-8") for m in reply_audio]
-        assert spoken == ["AUDIO<Ich habe frische Brötchen.>", "AUDIO<Was möchten Sie?>"]
+        assert spoken == [
+            "AUDIO<Ich habe frische Brötchen.>",
+            "AUDIO<Was möchten Sie?>",
+        ]
 
         # The session was actually closed in the learner store on end.
         with factory() as db:
@@ -171,11 +178,18 @@ async def test_audio_before_start_is_a_protocol_error(tmp_path):
     try:
         ws = FakeWS([up_bytes(b"x")])
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber([]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
         assert ws.sent == [
-            {"type": "error", "stage": "protocol", "message": "send a start message first"}
+            {
+                "type": "error",
+                "stage": "protocol",
+                "message": "send a start message first",
+            }
         ]
     finally:
         await conn.close()
@@ -190,12 +204,17 @@ async def test_stt_failure_is_reported_and_does_not_kill_the_session(tmp_path):
     try:
         ws = FakeWS(
             [
-                up_text({"type": "start", "scenario_id": "baeckerei", "thread_id": "t2"}),
+                up_text(
+                    {"type": "start", "scenario_id": "baeckerei", "thread_id": "t2"}
+                ),
                 up_bytes(b"bad"),
             ]
         )
         await run_voice_session(
-            ws, graph=graph, transcriber=BoomSTT(), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=BoomSTT(),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
         errors = [m for m in ws.sent if m["type"] == "error"]
@@ -209,15 +228,22 @@ async def test_silence_prompts_the_user_again(tmp_path):
     try:
         ws = FakeWS(
             [
-                up_text({"type": "start", "scenario_id": "baeckerei", "thread_id": "t3"}),
+                up_text(
+                    {"type": "start", "scenario_id": "baeckerei", "thread_id": "t3"}
+                ),
                 up_bytes(b"silence"),
             ]
         )
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber([""]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([""]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
-        stt_errors = [m for m in ws.sent if m["type"] == "error" and m["stage"] == "stt"]
+        stt_errors = [
+            m for m in ws.sent if m["type"] == "error" and m["stage"] == "stt"
+        ]
         assert stt_errors and "no speech" in stt_errors[0]["message"]
     finally:
         await conn.close()
@@ -228,12 +254,17 @@ async def test_turn_cap_closes_the_session(tmp_path):
     try:
         ws = FakeWS(
             [
-                up_text({"type": "start", "scenario_id": "baeckerei", "thread_id": "t4"}),
+                up_text(
+                    {"type": "start", "scenario_id": "baeckerei", "thread_id": "t4"}
+                ),
                 up_bytes(b"a"),
             ]
         )
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber(["hallo"]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["hallo"]),
+            synthesizer=FakeSynth(),
             settings=_settings(voice_max_turns=0),
         )
         assert any(m["type"] == "error" and m["stage"] == "limit" for m in ws.sent)
@@ -247,11 +278,18 @@ async def test_unknown_control_message_is_reported(tmp_path):
     try:
         ws = FakeWS([up_text({"type": "nonsense"})])
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber([]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
         assert ws.sent == [
-            {"type": "error", "stage": "protocol", "message": "unknown message 'nonsense'"}
+            {
+                "type": "error",
+                "stage": "protocol",
+                "message": "unknown message 'nonsense'",
+            }
         ]
     finally:
         await conn.close()
@@ -262,11 +300,18 @@ async def test_malformed_json_is_a_protocol_error_not_a_crash(tmp_path):
     try:
         ws = FakeWS([{"type": "websocket.receive", "text": "{not json"}])
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber([]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
         assert ws.sent == [
-            {"type": "error", "stage": "protocol", "message": "message is not valid JSON"}
+            {
+                "type": "error",
+                "stage": "protocol",
+                "message": "message is not valid JSON",
+            }
         ]
     finally:
         await conn.close()
@@ -276,10 +321,21 @@ async def test_unknown_scenario_in_start_is_a_protocol_error(tmp_path):
     graph, conn, factory = await build_graph(tmp_path, replies=[])
     try:
         ws = FakeWS(
-            [up_text({"type": "start", "scenario_id": "does-not-exist", "thread_id": "t5"})]
+            [
+                up_text(
+                    {
+                        "type": "start",
+                        "scenario_id": "does-not-exist",
+                        "thread_id": "t5",
+                    }
+                )
+            ]
         )
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber([]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
         assert _types(ws) == ["error"]
@@ -311,12 +367,17 @@ async def test_provider_failure_mid_turn_degrades_without_killing_the_socket(tmp
     try:
         ws = FakeWS(
             [
-                up_text({"type": "start", "scenario_id": "baeckerei", "thread_id": "t6"}),
+                up_text(
+                    {"type": "start", "scenario_id": "baeckerei", "thread_id": "t6"}
+                ),
                 up_bytes(b"audio"),
             ]
         )
         await run_voice_session(
-            ws, graph=graph, transcriber=FakeTranscriber(["hallo"]), synthesizer=FakeSynth(),
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["hallo"]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
         # The failing turn reported an error and still closed with turn_done; the
@@ -334,24 +395,34 @@ async def test_reconnect_on_same_thread_resumes_without_replaying_setup(tmp_path
     try:
         ws1 = FakeWS(
             [
-                up_text({"type": "start", "scenario_id": "nachbar", "thread_id": "keep"}),
+                up_text(
+                    {"type": "start", "scenario_id": "nachbar", "thread_id": "keep"}
+                ),
                 up_bytes(b"a"),
             ]
         )
         await run_voice_session(
-            ws1, graph=graph, transcriber=FakeTranscriber(["hallo"]), synthesizer=FakeSynth(),
+            ws1,
+            graph=graph,
+            transcriber=FakeTranscriber(["hallo"]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
 
         # New connection, same thread: start must resume, not re-run setup.
         ws2 = FakeWS(
             [
-                up_text({"type": "start", "scenario_id": "nachbar", "thread_id": "keep"}),
+                up_text(
+                    {"type": "start", "scenario_id": "nachbar", "thread_id": "keep"}
+                ),
                 up_bytes(b"b"),
             ]
         )
         await run_voice_session(
-            ws2, graph=graph, transcriber=FakeTranscriber(["tschuess"]), synthesizer=FakeSynth(),
+            ws2,
+            graph=graph,
+            transcriber=FakeTranscriber(["tschuess"]),
+            synthesizer=FakeSynth(),
             settings=_settings(),
         )
 

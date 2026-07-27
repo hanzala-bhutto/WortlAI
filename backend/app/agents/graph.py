@@ -52,7 +52,11 @@ def _reply_context(messages: list) -> str | None:
     message before the most recent user message. Gives the Corrector the exchange the
     utterance belongs to, so it isn't judging the sentence in a vacuum."""
     last_user = next(
-        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"),
+        (
+            i
+            for i in range(len(messages) - 1, -1, -1)
+            if messages[i].get("role") == "user"
+        ),
         None,
     )
     if last_user is None:

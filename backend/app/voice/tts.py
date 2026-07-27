@@ -84,7 +84,9 @@ class EdgeTTS:
     async def synth(self, text: str, *, rate: float = 1.0) -> AsyncIterator[bytes]:
         if not text.strip():
             return
-        percent = rate_to_percent(rate, rate_min=self._rate_min, rate_max=self._rate_max)
+        percent = rate_to_percent(
+            rate, rate_min=self._rate_min, rate_max=self._rate_max
+        )
         comm = self._factory(text=text, voice=self._voice, rate=percent)
         try:
             async for chunk in comm.stream():

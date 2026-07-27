@@ -24,9 +24,7 @@ def write_fallback(directory, name, text):
 
 
 def write_chat_fallback(directory, name, messages):
-    (directory / f"{name}.chat.json").write_text(
-        json.dumps(messages), encoding="utf-8"
-    )
+    (directory / f"{name}.chat.json").write_text(json.dumps(messages), encoding="utf-8")
 
 
 class FakePrompt:
@@ -138,7 +136,9 @@ class FakeChatPrompt:
 
 
 def test_live_chat_prompt_is_used_when_langfuse_returns_one(tmp_path):
-    write_chat_fallback(tmp_path, "tutor-system", [{"role": "system", "content": "BUNDLED"}])
+    write_chat_fallback(
+        tmp_path, "tutor-system", [{"role": "system", "content": "BUNDLED"}]
+    )
     client = FakeClient(
         prompt=FakeChatPrompt(
             [{"role": "system", "content": "Sprich Deutsch, Niveau {{level}}"}],
@@ -149,7 +149,9 @@ def test_live_chat_prompt_is_used_when_langfuse_returns_one(tmp_path):
 
     result = store.get_chat("tutor-system", variables={"level": "A2"})
 
-    assert result.messages == [{"role": "system", "content": "Sprich Deutsch, Niveau A2"}]
+    assert result.messages == [
+        {"role": "system", "content": "Sprich Deutsch, Niveau A2"}
+    ]
     assert result.is_fallback is False
     assert result.version == 7
     assert client.calls[0].type == "chat"
@@ -173,7 +175,9 @@ def test_unconfigured_chat_store_renders_bundled_fallback(tmp_path):
 
 
 def test_chat_sdk_error_degrades_to_bundled_fallback(tmp_path):
-    write_chat_fallback(tmp_path, "tutor-system", [{"role": "system", "content": "FB {{level}}"}])
+    write_chat_fallback(
+        tmp_path, "tutor-system", [{"role": "system", "content": "FB {{level}}"}]
+    )
     client = FakeClient(error=RuntimeError("langfuse unreachable"))
     store = PromptStore(client=client, fallback_dir=tmp_path)
 
@@ -192,7 +196,8 @@ def test_missing_chat_fallback_is_a_hard_error(tmp_path):
 
 def test_malformed_chat_fallback_is_a_hard_error(tmp_path):
     (tmp_path / "tutor-system.chat.json").write_text(
-        json.dumps([{"role": "system"}]), encoding="utf-8"  # missing content
+        json.dumps([{"role": "system"}]),
+        encoding="utf-8",  # missing content
     )
     store = PromptStore(client=None, fallback_dir=tmp_path)
 

@@ -156,7 +156,6 @@ class PromptStore:
             )
             return RenderedPrompt(_render(fallback, variables), True, name, None)
 
-
     def get_chat(
         self,
         name: str,
