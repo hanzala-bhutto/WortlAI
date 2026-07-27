@@ -10,6 +10,7 @@ test_tutor's job. Persistence goes to a temp learner DB and the checkpointer to 
 temp file, so nothing touches the app's real stores.
 """
 
+import asyncio
 from types import SimpleNamespace
 
 import aiosqlite
@@ -17,6 +18,7 @@ import pytest
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sqlalchemy.orm import sessionmaker
 
+from app.agents.corrector import CorrectorCollector, ErrorReport
 from app.agents.graph import SessionGraphDeps, build_session_graph
 from app.agents.persistence import SessionWriter
 from app.agents.scenarios import get_scenario
@@ -44,18 +46,37 @@ class FakeTutor:
         return SimpleNamespace(text=text, regenerated=False, prompt_is_fallback=True)
 
 
+class FakeCorrector:
+    """Stands in for the Corrector: returns a queued report-list per user turn, or []
+    forever once the queue empties, and records every utterance/context it analysed."""
+
+    def __init__(self, batches=None):
+        self._batches = list(batches or [])
+        self.seen = []
+
+    async def analyze(self, *, utterance, context=None):
+        self.seen.append(SimpleNamespace(utterance=utterance, context=context))
+        return self._batches.pop(0) if self._batches else []
+
+
 def make_factory(tmp_path, name="w.db"):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
-async def build_app(tmp_path, replies, *, ck_name="ck.db", factory=None):
+async def build_app(
+    tmp_path, replies, *, ck_name="ck.db", factory=None, collector=None
+):
     """A compiled session graph over a FakeTutor, a temp learner DB and a temp
-    checkpoint file. Returns (app, conn, factory); close conn when done."""
+    checkpoint file. Returns (app, conn, factory); close conn when done. `collector`
+    defaults to one over a FakeCorrector that finds no errors, so tests that don't
+    care about correction are unaffected."""
     factory = factory or make_factory(tmp_path)
     deps = SessionGraphDeps(
-        tutor=FakeTutor(replies), persister=SessionWriter(session_factory=factory)
+        tutor=FakeTutor(replies),
+        collector=collector or CorrectorCollector(FakeCorrector()),
+        persister=SessionWriter(session_factory=factory),
     )
     builder = build_session_graph(deps)
     conn = await aiosqlite.connect(str(tmp_path / ck_name))
@@ -178,6 +199,106 @@ async def test_debrief_closes_session_and_writes_pending_errors(tmp_path):
             assert row.ended_at is not None
             assert len(row.errors) == 1
             assert row.errors[0].error_type == "grammar.case.dative"
+    finally:
+        await conn.close()
+
+
+def error_report(severity, error_type="grammar.case.dative"):
+    return ErrorReport(
+        error_type=error_type,
+        severity=severity,
+        utterance="mit der Hund",
+        correction="mit dem Hund",
+        explanation="Nach mit steht der Dativ.",
+    )
+
+
+class GatedCorrector:
+    """Blocks inside analyze() until released, so a test can prove the correct node
+    does not await the analysis while the turn runs."""
+
+    def __init__(self, batch):
+        self._batch = batch
+        self.started = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def analyze(self, *, utterance, context=None):
+        self.started.set()
+        await self.gate.wait()
+        return self._batch
+
+
+async def test_corrector_errors_are_collected_and_persisted_at_debrief(tmp_path):
+    corrector = FakeCorrector([[error_report("critical"), error_report("minor")]])
+    app, conn, factory = await build_app(
+        tmp_path, replies=["Alles klar."], collector=CorrectorCollector(corrector)
+    )
+    try:
+        setup = await app.ainvoke({"scenario_id": "baeckerei"}, cfg())
+        sid = setup["session_id"]
+        await app.ainvoke({"user_input": "Ich gehe mit der Hund."}, cfg())
+        await app.ainvoke({"end_requested": True}, cfg())
+
+        # The Corrector saw the utterance with the opening line as its context.
+        assert corrector.seen[0].utterance == "Ich gehe mit der Hund."
+        assert corrector.seen[0].context == get_scenario("baeckerei").opening_line
+
+        with factory() as db:
+            row = db.get(Session, sid)
+            assert row.ended_at is not None
+            # Default threshold is 'critical', so only the breaking error persisted.
+            assert len(row.errors) == 1
+            assert row.errors[0].severity == "critical"
+            assert row.errors[0].explanation == "Nach mit steht der Dativ."
+    finally:
+        await conn.close()
+
+
+async def test_a_turn_without_a_new_utterance_analyses_nothing(tmp_path):
+    # An invocation that carries no user_input (a no-op converse) must not re-submit
+    # the previous turn's utterance, or its errors would be counted twice at debrief.
+    corrector = FakeCorrector([[error_report("critical")]])
+    app, conn, factory = await build_app(
+        tmp_path, replies=["Antwort eins.", "Antwort zwei."],
+        collector=CorrectorCollector(corrector),
+    )
+    try:
+        setup = await app.ainvoke({"scenario_id": "baeckerei"}, cfg())
+        sid = setup["session_id"]
+        await app.ainvoke({"user_input": "Ich gehe mit der Hund."}, cfg())  # analysed
+        await app.ainvoke({}, cfg())  # no new utterance: must analyse nothing
+        await app.ainvoke({"end_requested": True}, cfg())
+
+        assert [s.utterance for s in corrector.seen] == ["Ich gehe mit der Hund."]
+        with factory() as db:
+            assert len(db.get(Session, sid).errors) == 1  # not double-counted
+    finally:
+        await conn.close()
+
+
+async def test_correct_does_not_block_the_turn_on_analysis(tmp_path):
+    corrector = GatedCorrector([error_report("critical")])
+    app, conn, factory = await build_app(
+        tmp_path, replies=["Hallo zurück."], collector=CorrectorCollector(corrector)
+    )
+    try:
+        setup = await app.ainvoke({"scenario_id": "baeckerei"}, cfg())
+        sid = setup["session_id"]
+
+        # The turn finishes while the analysis is still gated: the correct node
+        # fire-and-forgets rather than awaiting the Corrector (AC #1). A timeout here
+        # would mean the node blocked on the analysis.
+        await asyncio.wait_for(
+            app.ainvoke({"user_input": "Ich gehe mit der Hund."}, cfg()), timeout=5
+        )
+        assert corrector.started.is_set()  # it did start, concurrently
+        assert corrector.gate.is_set() is False  # and the turn did not wait for it
+
+        # Debrief is where we wait: release the analysis, close out, and it lands.
+        corrector.gate.set()
+        await app.ainvoke({"end_requested": True}, cfg())
+        with factory() as db:
+            assert len(db.get(Session, sid).errors) == 1
     finally:
         await conn.close()
 
