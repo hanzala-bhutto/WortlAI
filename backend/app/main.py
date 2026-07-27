@@ -13,6 +13,7 @@ from app.api import health, v1
 from app.config import get_settings
 from app.learner.migrate import upgrade_to_head
 from app.static import FRONTEND_DIST, mount_frontend
+from app.voice.pipeline import build_voice_pipeline
 
 
 @asynccontextmanager
@@ -25,9 +26,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (#8) to drive. It opens the checkpointer connection now and closes it, with
     # the provider's HTTP client, on shutdown.
     app.state.session_runtime = await build_session_runtime()
+    # The voice loop's STT/TTS pair, held next to the runtime for the WS route.
+    app.state.voice_pipeline = build_voice_pipeline()
     try:
         yield
     finally:
+        await app.state.voice_pipeline.aclose()
         await app.state.session_runtime.aclose()
 
 

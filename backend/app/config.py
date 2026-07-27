@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     tutor_temperature: float = 0.6
     tutor_max_tokens: int = 320
 
+    # Voice loop guardrails (#3 / guardrail #3): a per-utterance byte ceiling so a
+    # runaway or malicious client can't ship huge audio to the STT free tier, and a
+    # per-connection turn cap so one session can't loop forever burning requests.
+    max_utterance_bytes: int = 2_000_000
+    voice_max_turns: int = 60
+
+    # Playback speed for TTS. All three voice-speed knobs live here (not scattered
+    # in code): the default when a client sends no rate, and the band a client rate
+    # is clamped to. Slow for early practice, up to slightly-fast later.
+    voice_rate_default: float = 1.0
+    voice_rate_min: float = 0.7
+    voice_rate_max: float = 1.2
+
     def configured_keys(self) -> dict[str, bool]:
         """Which credentials are present, so a misconfigured .env shows up before
         it fails mid-conversation."""
