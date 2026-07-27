@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     tutor_temperature: float = 0.6
     tutor_max_tokens: int = 320
 
+    # Corrector tuning, mirroring the Tutor knobs. Temperature 0 because error
+    # detection wants repeatability, not variety. The severity threshold is the
+    # staged-correction policy (guardrail/pedagogy): "critical" surfaces only
+    # communication-breaking errors in the early weeks; flip to "minor" later to
+    # start debriefing the smaller slips too - a config change, not a code edit.
+    corrector_prompt_label: str = "production"
+    corrector_temperature: float = 0.0
+    corrector_max_tokens: int = 512
+    corrector_severity_threshold: str = "critical"
+
     # Voice loop guardrails (#3 / guardrail #3): a per-utterance byte ceiling so a
     # runaway or malicious client can't ship huge audio to the STT free tier, and a
     # per-connection turn cap so one session can't loop forever burning requests.

@@ -84,6 +84,10 @@ class ErrorLog(Base):
     severity: Mapped[str] = mapped_column(String(16))
     utterance: Mapped[str] = mapped_column(Text)
     correction: Mapped[str] = mapped_column(Text)
+    # A short learner-facing note on why it was wrong, shown in the debrief. Nullable
+    # so an error caught before the Corrector wrote explanations (or by a hand tool)
+    # still stores.
+    explanation: Mapped[str | None] = mapped_column(Text, default=None)
 
     session: Mapped[Session] = relationship(back_populates="errors")
 

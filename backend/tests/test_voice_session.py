@@ -20,6 +20,7 @@ import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sqlalchemy.orm import sessionmaker
 
+from app.agents.corrector import CorrectorCollector
 from app.agents.graph import SessionGraphDeps, build_session_graph
 from app.agents.persistence import SessionWriter
 from app.agents.scenarios import get_scenario
@@ -78,12 +79,22 @@ def _settings(**over):
     return SimpleNamespace(**base)
 
 
+class _NoErrorCorrector:
+    """A Corrector that finds nothing, so these voice-transport tests aren't coupled
+    to error analysis - that behaviour lives in test_corrector / test_session_graph."""
+
+    async def analyze(self, *, utterance, context=None):
+        return []
+
+
 async def build_graph(tmp_path, replies):
     engine = make_engine(f"sqlite:///{tmp_path / 'w.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     deps = SessionGraphDeps(
-        tutor=FakeTutor(replies), persister=SessionWriter(session_factory=factory)
+        tutor=FakeTutor(replies),
+        collector=CorrectorCollector(_NoErrorCorrector()),
+        persister=SessionWriter(session_factory=factory),
     )
     conn = await aiosqlite.connect(str(tmp_path / "ck.db"))
     saver = AsyncSqliteSaver(conn)
@@ -288,7 +299,11 @@ async def test_provider_failure_mid_turn_degrades_without_killing_the_socket(tmp
     engine = make_engine(f"sqlite:///{tmp_path / 'w.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
-    deps = SessionGraphDeps(tutor=BoomTutor(), persister=SessionWriter(session_factory=factory))
+    deps = SessionGraphDeps(
+        tutor=BoomTutor(),
+        collector=CorrectorCollector(_NoErrorCorrector()),
+        persister=SessionWriter(session_factory=factory),
+    )
     conn = await aiosqlite.connect(str(tmp_path / "ck.db"))
     saver = AsyncSqliteSaver(conn)
     await saver.setup()
