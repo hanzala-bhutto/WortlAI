@@ -25,6 +25,11 @@ langgraph-checkpoint-sqlite==3.1.0
 # transitive dep of the checkpointer, pinned here because we import it directly.
 aiosqlite==0.22.1
 
+# Voice out: German neural TTS (#3), behind app/voice/tts.py. Unofficial endpoint
+# (Qwen3-TTS is the documented fallback), so it stays quarantined behind that one
+# interface. STT is Groq Whisper over httpx2, so it needs no extra dependency.
+edge-tts==7.2.8
+
 # Learner persistence: sessions, error log, immersion hours (#6). Alembic from
 # day one because the schema grows every phase (FSRS + graph tables in Phase 2).
 sqlalchemy==2.0.36
