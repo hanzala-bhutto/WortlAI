@@ -108,6 +108,7 @@ Listening-specific training (the weakest skill for most learners): a **Listening
 - **Hands-free mode**: Silero VAD (voice activity detection) detects end of speech - no push-to-talk needed; feels like a phone call. (Push-to-talk stays as the reliable fallback.)
 - **Tappable transcript**: click any German word → instant gloss + one-tap "add to my FSRS deck".
 - **Scenarios with stakes**: goal-based roleplay (get the Termin, negotiate the Kaution, handle the grumpy Beamter) with pass/fail outcome and score; different TTS voices = different personas.
+- **Multi-persona scenes** (future): scenarios with more than one counterpart - a meeting, a shop with a queue behind you, dinner with two people - not just the 1:1 dialogue of Phase 1. A B1/B2 learner needs to handle turn-taking and being addressed by several speakers. The session graph already routes to a `converse` node per turn, so this grows additively: a `Scenario` gains multiple personas and the converse step picks who speaks; no topology rewrite. The single-persona shape in Phase 1 must not bake in a "there is exactly one other person" assumption that blocks this.
 - **"Wie bitte?" button**: replay slower + reveal transcript - trains listening rather than punishing it.
 - **Live level dial**: user adjusts difficulty mid-conversation; tutor visibly adapts vocabulary/speed.
 - **15-min structured daily session**: 3-min spoken warm-up on due vocab → 10-min scenario → 2-min debrief; streaks + weekly CEFR trajectory chart for visible progress.

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -29,9 +29,9 @@ def test_readyz_reports_qdrant_without_failing_when_it_is_down(monkeypatch):
     """A cold Qdrant is reported, not fatal - nothing needs it until Phase 2."""
 
     async def refuse(*args, **kwargs):
-        raise httpx.ConnectError("connection refused")
+        raise httpx2.ConnectError("connection refused")
 
-    monkeypatch.setattr(httpx.AsyncClient, "get", refuse)
+    monkeypatch.setattr(httpx2.AsyncClient, "get", refuse)
 
     response = client.get("/readyz")
     assert response.status_code == 200
@@ -43,9 +43,9 @@ def test_readyz_reports_qdrant_without_failing_when_it_is_down(monkeypatch):
 
 def test_readyz_reports_qdrant_ready_when_it_answers(monkeypatch):
     async def ok(*args, **kwargs):
-        return httpx.Response(200)
+        return httpx2.Response(200)
 
-    monkeypatch.setattr(httpx.AsyncClient, "get", ok)
+    monkeypatch.setattr(httpx2.AsyncClient, "get", ok)
 
     body = client.get("/readyz").json()
     assert body["qdrant"]["ready"] is True

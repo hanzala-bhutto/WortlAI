@@ -11,6 +11,7 @@ Everything runs against a fake Langfuse client, so these tests never hit the
 network and describe our wrapper's behaviour, not the SDK's.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,12 @@ from app.llmops.prompts import PromptStore
 
 def write_fallback(directory, name, text):
     (directory / f"{name}.txt").write_text(text, encoding="utf-8")
+
+
+def write_chat_fallback(directory, name, messages):
+    (directory / f"{name}.chat.json").write_text(
+        json.dumps(messages), encoding="utf-8"
+    )
 
 
 class FakePrompt:
@@ -108,3 +115,86 @@ def test_label_passes_through_to_the_sdk(tmp_path):
 
     assert client.calls[0].label == "staging"
     assert client.calls[0].type == "text"
+
+
+class FakeChatPrompt:
+    """Stands in for a langfuse ChatPromptClient: compiles {{var}} inside each
+    message's content and returns a list of {role, content} dicts."""
+
+    def __init__(self, messages, *, is_fallback=False, version=4):
+        self._messages = messages
+        self.is_fallback = is_fallback
+        self.version = version
+
+    def compile(self, **variables):
+        out = []
+        for msg in self._messages:
+            content = msg["content"]
+            for key, value in variables.items():
+                content = content.replace("{{" + key + "}}", str(value))
+                content = content.replace("{{ " + key + " }}", str(value))
+            out.append({"role": msg["role"], "content": content})
+        return out
+
+
+def test_live_chat_prompt_is_used_when_langfuse_returns_one(tmp_path):
+    write_chat_fallback(tmp_path, "tutor-system", [{"role": "system", "content": "BUNDLED"}])
+    client = FakeClient(
+        prompt=FakeChatPrompt(
+            [{"role": "system", "content": "Sprich Deutsch, Niveau {{level}}"}],
+            version=7,
+        )
+    )
+    store = PromptStore(client=client, fallback_dir=tmp_path)
+
+    result = store.get_chat("tutor-system", variables={"level": "A2"})
+
+    assert result.messages == [{"role": "system", "content": "Sprich Deutsch, Niveau A2"}]
+    assert result.is_fallback is False
+    assert result.version == 7
+    assert client.calls[0].type == "chat"
+
+
+def test_unconfigured_chat_store_renders_bundled_fallback(tmp_path):
+    write_chat_fallback(
+        tmp_path,
+        "tutor-system",
+        [{"role": "system", "content": "Niveau {{level}}, Rolle {{persona}}"}],
+    )
+    store = PromptStore(client=None, fallback_dir=tmp_path)
+
+    result = store.get_chat(
+        "tutor-system", variables={"level": "B1", "persona": "Bäcker"}
+    )
+
+    assert result.messages == [{"role": "system", "content": "Niveau B1, Rolle Bäcker"}]
+    assert result.is_fallback is True
+    assert result.version is None
+
+
+def test_chat_sdk_error_degrades_to_bundled_fallback(tmp_path):
+    write_chat_fallback(tmp_path, "tutor-system", [{"role": "system", "content": "FB {{level}}"}])
+    client = FakeClient(error=RuntimeError("langfuse unreachable"))
+    store = PromptStore(client=client, fallback_dir=tmp_path)
+
+    result = store.get_chat("tutor-system", variables={"level": "A2"})
+
+    assert result.messages == [{"role": "system", "content": "FB A2"}]
+    assert result.is_fallback is True
+
+
+def test_missing_chat_fallback_is_a_hard_error(tmp_path):
+    store = PromptStore(client=None, fallback_dir=tmp_path)
+
+    with pytest.raises(KeyError):
+        store.get_chat("no-such-chat-prompt")
+
+
+def test_malformed_chat_fallback_is_a_hard_error(tmp_path):
+    (tmp_path / "tutor-system.chat.json").write_text(
+        json.dumps([{"role": "system"}]), encoding="utf-8"  # missing content
+    )
+    store = PromptStore(client=None, fallback_dir=tmp_path)
+
+    with pytest.raises(ValueError):
+        store.get_chat("tutor-system")

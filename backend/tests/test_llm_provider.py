@@ -1,6 +1,6 @@
 """Contract for the LLM provider layer.
 
-Everything is exercised against a mocked OpenAI-compatible endpoint (httpx
+Everything is exercised against a mocked OpenAI-compatible endpoint (httpx2
 MockTransport), so these tests never touch the network and describe behaviour,
 not Groq's live responses. The two things that matter and are hard to eyeball in
 production are the fallback chain (429/5xx walks primary -> secondary -> NIM) and
@@ -10,7 +10,7 @@ that retries happen before a fallback, not instead of it.
 import json
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 
 from app.llm.provider import LLMProvider, ProviderError
@@ -34,35 +34,35 @@ def make_settings(*, groq_key="gk", nim_key="nk"):
     )
 
 
-def chat_response(content: str) -> httpx.Response:
-    return httpx.Response(
+def chat_response(content: str) -> httpx2.Response:
+    return httpx2.Response(
         200, json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}
     )
 
 
-def sse_response(tokens: list[str]) -> httpx.Response:
+def sse_response(tokens: list[str]) -> httpx2.Response:
     """A streamed chat completion, one delta per token plus the [DONE] sentinel."""
     lines = []
     for tok in tokens:
         payload = {"choices": [{"delta": {"content": tok}}]}
         lines.append(f"data: {json.dumps(payload)}\n\n")
     lines.append("data: [DONE]\n\n")
-    return httpx.Response(200, text="".join(lines))
+    return httpx2.Response(200, text="".join(lines))
 
 
 def provider_with(routes, *, settings=None):
     """Wire an LLMProvider to a MockTransport driven by `routes`: model id ->
-    list of httpx.Response, consumed one per request (last repeats). Returns the
+    list of httpx2.Response, consumed one per request (last repeats). Returns the
     provider and a list that records the model of every request made, in order."""
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         model = json.loads(request.content)["model"]
         calls.append(model)
         queue = routes[model]
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     provider = LLMProvider(settings=settings or make_settings(), client=client)
     return provider, calls
 
@@ -92,8 +92,8 @@ async def test_complete_returns_primary_content_without_touching_fallback():
 async def test_429_on_primary_falls_back_through_the_chain():
     provider, calls = provider_with(
         {
-            PRIMARY: [httpx.Response(429, json={"error": "rate limited"})],
-            SECONDARY: [httpx.Response(429, json={"error": "rate limited"})],
+            PRIMARY: [httpx2.Response(429, json={"error": "rate limited"})],
+            SECONDARY: [httpx2.Response(429, json={"error": "rate limited"})],
             FALLBACK: [chat_response("Vom NIM")],
         }
     )
@@ -110,7 +110,7 @@ async def test_429_on_primary_falls_back_through_the_chain():
 async def test_5xx_triggers_fallback_too():
     provider, calls = provider_with(
         {
-            PRIMARY: [httpx.Response(503)],
+            PRIMARY: [httpx2.Response(503)],
             SECONDARY: [chat_response("Zweitmodell")],
         }
     )
@@ -123,7 +123,7 @@ async def test_5xx_triggers_fallback_too():
 
 async def test_a_single_429_is_retried_then_succeeds_on_the_same_model():
     provider, calls = provider_with(
-        {PRIMARY: [httpx.Response(429), chat_response("Nach Retry")]}
+        {PRIMARY: [httpx2.Response(429), chat_response("Nach Retry")]}
     )
 
     reply = await provider.complete(MESSAGES)
@@ -135,9 +135,9 @@ async def test_a_single_429_is_retried_then_succeeds_on_the_same_model():
 async def test_all_providers_failing_raises_provider_error():
     provider, _ = provider_with(
         {
-            PRIMARY: [httpx.Response(500)],
-            SECONDARY: [httpx.Response(500)],
-            FALLBACK: [httpx.Response(500)],
+            PRIMARY: [httpx2.Response(500)],
+            SECONDARY: [httpx2.Response(500)],
+            FALLBACK: [httpx2.Response(500)],
         }
     )
 
@@ -159,8 +159,8 @@ async def test_an_unconfigured_provider_is_dropped_from_the_chain():
     when both Groq models fail."""
     provider, calls = provider_with(
         {
-            PRIMARY: [httpx.Response(500)],
-            SECONDARY: [httpx.Response(500)],
+            PRIMARY: [httpx2.Response(500)],
+            SECONDARY: [httpx2.Response(500)],
         },
         settings=make_settings(nim_key=""),
     )
@@ -176,7 +176,7 @@ async def test_malformed_200_body_falls_back_instead_of_raising():
     throw a KeyError past the fallback chain."""
     provider, calls = provider_with(
         {
-            PRIMARY: [httpx.Response(200, json={"unexpected": "shape"})],
+            PRIMARY: [httpx2.Response(200, json={"unexpected": "shape"})],
             SECONDARY: [chat_response("Gerettet")],
         }
     )
@@ -228,7 +228,7 @@ async def test_stream_yields_tokens_in_order():
 async def test_stream_falls_back_before_the_first_token():
     provider, calls = provider_with(
         {
-            PRIMARY: [httpx.Response(503)],
+            PRIMARY: [httpx2.Response(503)],
             SECONDARY: [sse_response(["Fall", "back"])],
         }
     )

@@ -8,10 +8,22 @@
 fastapi==0.140.0
 uvicorn[standard]==0.51.0
 pydantic-settings==2.14.2
-httpx==0.28.1
+# HTTP client. httpx2 is the next-gen line (pydantic/httpx2); Starlette 1.3's
+# TestClient uses it and deprecates plain httpx. We depend on httpx2 directly so
+# both our own async client and the test client run on it - see app/llm/provider.py.
+httpx2==2.9.1
 
 # LLMOps: tracing + prompt management (#7). Pulls in the OpenTelemetry SDK.
 langfuse==4.14.1
+
+# Session orchestration: the conversation as a checkpointed state graph (#4). The
+# checkpointer gets its own SQLite file (checkpoints.db) via aiosqlite, separate
+# from wortlai.db - two writers, no shared connection.
+langgraph==1.2.9
+langgraph-checkpoint-sqlite==3.1.0
+# The async SQLite driver the checkpointer's connection is opened with. A
+# transitive dep of the checkpointer, pinned here because we import it directly.
+aiosqlite==0.22.1
 
 # Learner persistence: sessions, error log, immersion hours (#6). Alembic from
 # day one because the schema grows every phase (FSRS + graph tables in Phase 2).

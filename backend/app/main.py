@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.agents.runtime import build_session_runtime
 from app.api import health, v1
 from app.config import get_settings
 from app.learner.migrate import upgrade_to_head
@@ -15,12 +16,19 @@ from app.static import FRONTEND_DIST, mount_frontend
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Create or migrate the learner DB on boot so a fresh clone needs no manual
     # `alembic upgrade`. Runs on real startup only; the test client instantiated
     # without a `with` block never triggers it, keeping the suite hermetic.
     upgrade_to_head()
-    yield
+    # Build the session runtime once and hold it on app.state for the voice loop
+    # (#8) to drive. It opens the checkpointer connection now and closes it, with
+    # the provider's HTTP client, on shutdown.
+    app.state.session_runtime = await build_session_runtime()
+    try:
+        yield
+    finally:
+        await app.state.session_runtime.aclose()
 
 
 class ServiceInfo(BaseModel):
@@ -44,6 +52,7 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> FastAPI:
         openapi_tags=[
             {"name": "health", "description": "Liveness and readiness probes."},
             {"name": "learner", "description": "Sessions, errors and immersion hours."},
+            {"name": "session", "description": "Roleplay scenarios and the voice session loop."},
         ],
     )
 

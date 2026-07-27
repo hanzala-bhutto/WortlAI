@@ -9,7 +9,7 @@ one to call after `docker compose up -d`.
 
 from typing import Literal
 
-import httpx
+import httpx2
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -66,10 +66,10 @@ async def readyz() -> ReadinessResponse:
 
     qdrant = QdrantStatus(url=settings.qdrant_url, ready=False)
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx2.AsyncClient(timeout=2.0) as client:
             response = await client.get(f"{settings.qdrant_url}/readyz")
         qdrant.ready = response.status_code == 200
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         qdrant.error = f"{type(exc).__name__}: {exc}"
 
     keys = settings.configured_keys()
