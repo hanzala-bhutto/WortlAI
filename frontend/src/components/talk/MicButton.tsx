@@ -74,8 +74,10 @@ export function MicButton({
         }}
         className={[
           "relative z-10 grid size-24 place-items-center rounded-full text-3xl text-white",
-          "shadow-clay transition-shadow duration-100 select-none touch-none",
-          "active:shadow-clay-in disabled:opacity-50",
+          "shadow-clay transition-[transform,box-shadow] duration-100 select-none touch-none cursor-pointer",
+          "enabled:hover:-translate-y-1 enabled:hover:brightness-105",
+          "enabled:active:translate-y-1 enabled:active:shadow-clay-in enabled:active:brightness-100",
+          "disabled:opacity-50 disabled:cursor-not-allowed",
           "focus-visible:outline-4 focus-visible:outline-offset-4 focus-visible:outline-brand",
           recording
             ? "bg-gradient-to-br from-pink to-again animate-pulse"

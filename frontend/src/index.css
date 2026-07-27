@@ -63,6 +63,51 @@
   }
 }
 
+/* Manual theme override (the ◐ toggle stamps data-theme on <html>). Higher
+ * specificity than the base :root and the media query, so it wins in both
+ * directions - picking light while the OS is dark, and vice versa. */
+:root[data-theme="light"] {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  --bg: #efe9fb;
+  --bg2: #f7e9f0;
+  --surface: #fdfbff;
+  --sunk: #efeafa;
+  --ink: #463d63;
+  --head: #241d38;
+  --soft: #8a80a8;
+  --line: #e6ddf5;
+
+  --clay: 6px 6px 14px rgba(150, 120, 200, 0.32),
+    -5px -5px 12px rgba(255, 255, 255, 0.92);
+  --clay-sm: 4px 4px 10px rgba(150, 120, 200, 0.3),
+    -3px -3px 8px rgba(255, 255, 255, 0.9);
+  --clay-in: inset 4px 4px 9px rgba(150, 120, 200, 0.3),
+    inset -4px -4px 9px rgba(255, 255, 255, 0.9);
+}
+
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+
+  --bg: #130f1f;
+  --bg2: #181022;
+  --surface: #221b34;
+  --sunk: #1a1428;
+  --ink: #cfc6e6;
+  --head: #f2eefb;
+  --soft: #8b81a8;
+  --line: #332a48;
+
+  --clay: 6px 6px 16px rgba(0, 0, 0, 0.55),
+    -4px -4px 12px rgba(255, 255, 255, 0.045);
+  --clay-sm: 4px 4px 11px rgba(0, 0, 0, 0.5),
+    -3px -3px 8px rgba(255, 255, 255, 0.04);
+  --clay-in: inset 4px 4px 10px rgba(0, 0, 0, 0.5),
+    inset -3px -3px 8px rgba(255, 255, 255, 0.04);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

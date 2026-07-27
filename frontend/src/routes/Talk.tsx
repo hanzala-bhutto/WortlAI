@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { MicButton } from "../components/talk/MicButton";
 import { type ScenarioSummary, api } from "../lib/api";
@@ -10,9 +10,9 @@ import { useVoiceSession } from "../session/useVoiceSession";
 /** German chrome; the conversation itself is German, glosses land in PR2. */
 const MIC_LABEL: Record<Phase, string> = {
   listening: "Halten zum Sprechen",
-  recording: "Aufnahme... loslassen zum Senden",
-  thinking: "Einen Moment...",
-  replying: "Tutor spricht...",
+  recording: "Aufnahme laeuft ... loslassen zum Senden",
+  thinking: "Einen Moment ...",
+  replying: "Tutor spricht ...",
 };
 
 export function Talk() {
@@ -32,13 +32,19 @@ export function Talk() {
   });
   const { state, connect, hold, release, end } = session;
 
-  // Open the socket once the scenario is known.
   useEffect(() => {
     if (scenario) connect();
   }, [scenario, connect]);
 
-  // A turn ends on pointerup anywhere, and Spacebar mirrors hold-to-talk, so
-  // the mic works even if the pointer drags off the button mid-utterance.
+  // Keep the newest message in view as turns arrive and the reply streams in.
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const lastText = state.turns.at(-1)?.text ?? "";
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [state.turns.length, lastText]);
+
+  // A turn ends on pointerup anywhere, and Spacebar mirrors hold-to-talk, so the
+  // mic works even if the pointer drags off the button mid-utterance.
   useEffect(() => {
     const up = () => void release();
     const keyDown = (e: KeyboardEvent) => {
@@ -62,121 +68,232 @@ export function Talk() {
 
   if (scenarios.isError) {
     return (
-      <Centered>
-        <p className="font-medium text-head">Szenarien konnten nicht geladen werden.</p>
-        <p className="text-sm text-soft">Laeuft das Backend? (uvicorn auf :8000)</p>
-      </Centered>
-    );
-  }
-  if (!scenario) {
-    return (
-      <Centered>
-        <p className="text-soft">Szenario wird geladen...</p>
-      </Centered>
+      <Shell>
+        <div className="grid flex-1 place-items-center px-6 text-center">
+          <div>
+            <p className="text-lg font-semibold text-head">
+              Szenarien konnten nicht geladen werden.
+            </p>
+            <p className="mt-1 text-sm text-soft">
+              Laeuft das Backend? (uvicorn auf :8000)
+            </p>
+          </div>
+        </div>
+      </Shell>
     );
   }
 
   return (
-    <main className="surface-warm mx-auto flex min-h-full w-full max-w-2xl flex-1 flex-col px-4 py-4 text-ink">
-      <Rail scenario={scenario} connected={state.status === "ready"} />
+    <Shell scenario={scenario} connected={state.status === "ready"}>
+      <div className="flex min-h-0 flex-1">
+        {/* Conversation column + control dock */}
+        <section className="flex min-w-0 flex-1 flex-col">
+          {/* Scroll lives on this wrapper; justify-end sits on the inner min-h-full
+              child so overflow scrolls from the top instead of clipping it. */}
+          <div className="flex-1 overflow-y-auto">
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end gap-5 px-6 py-8">
+              {!scenario && <p className="m-auto text-soft">Szenario wird geladen ...</p>}
+              {scenario && state.turns.length === 0 && (
+                <p className="m-auto max-w-md rounded-2xl bg-sunk px-6 py-4 text-center text-base font-medium text-soft shadow-clay-in">
+                  Halte die Taste und sprich.
+                  <br />
+                  <span className="text-head">Hold the mic and speak German.</span>
+                </p>
+              )}
+              {state.turns.map((turn) => (
+                <Bubble key={turn.id} turn={turn} />
+              ))}
+              <div ref={bottomRef} />
+            </div>
+          </div>
 
-      <div className="flex flex-1 flex-col justify-end gap-4 overflow-y-auto py-4">
-        {state.turns.length === 0 && state.status === "ready" && (
-          <p className="mx-auto rounded-2xl bg-sunk px-5 py-3 text-center text-sm font-medium text-soft shadow-clay-in">
-            Halte die Taste und sprich. <span className="text-head">Hold the mic, speak German.</span>
-          </p>
-        )}
-        {state.turns.map((turn) => (
-          <Bubble key={turn.id} turn={turn} />
-        ))}
+          <div className="border-t border-line/70 bg-surface/50 px-6 py-6 backdrop-blur-sm">
+            {state.error && (
+              <p
+                role="status"
+                className="mx-auto mb-4 w-fit rounded-xl bg-surface px-4 py-2 text-center text-sm font-semibold text-again shadow-clay-sm"
+              >
+                {errorLabel(state.error.stage)}
+              </p>
+            )}
+            <div className="relative mx-auto flex max-w-3xl items-center justify-center">
+              <div className="flex flex-col items-center gap-3">
+                <MicButton
+                  recording={state.phase === "recording"}
+                  disabled={
+                    state.status !== "ready" ||
+                    (state.phase !== "listening" && state.phase !== "recording")
+                  }
+                  analyserRef={session.analyserRef}
+                  onHold={() => void hold()}
+                />
+                <span className="font-mono text-xs font-bold tracking-wide text-soft uppercase">
+                  {state.status === "closed"
+                    ? "Session beendet"
+                    : MIC_LABEL[state.phase]}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={end}
+                disabled={state.status !== "ready"}
+                className="absolute right-0 cursor-pointer rounded-2xl bg-sunk px-5 py-3 text-sm font-extrabold text-soft shadow-clay-sm transition-[transform,box-shadow] duration-100 enabled:hover:-translate-y-0.5 enabled:hover:text-head enabled:active:translate-y-0.5 enabled:active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Session beenden
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Desktop-only info panel: what this scenario practises */}
+        {scenario && <SidePanel scenario={scenario} />}
       </div>
-
-      {state.error && (
-        <p
-          role="status"
-          className="mx-auto mb-3 rounded-xl bg-surface px-4 py-2 text-center text-sm font-semibold text-again shadow-clay-sm"
-        >
-          {errorLabel(state.error.stage)}
-        </p>
-      )}
-
-      <div className="flex flex-col items-center gap-6 pt-2 pb-4">
-        <div className="grid place-items-center">
-          <MicButton
-            recording={state.phase === "recording"}
-            disabled={
-              state.status !== "ready" ||
-              (state.phase !== "listening" && state.phase !== "recording")
-            }
-            analyserRef={session.analyserRef}
-            onHold={() => void hold()}
-          />
-          <span className="mt-3 font-mono text-xs font-bold tracking-wide text-soft uppercase">
-            {state.status === "closed" ? "Session beendet" : MIC_LABEL[state.phase]}
-          </span>
-        </div>
-
-        <button
-          type="button"
-          onClick={end}
-          disabled={state.status !== "ready"}
-          className="rounded-2xl bg-sunk px-5 py-3 text-sm font-extrabold text-soft shadow-clay-sm transition-shadow active:shadow-clay-in disabled:opacity-50"
-        >
-          Session beenden
-        </button>
-      </div>
-    </main>
+    </Shell>
   );
 }
 
-function Rail({
+function Shell({
+  children,
   scenario,
   connected,
 }: {
-  scenario: ScenarioSummary;
-  connected: boolean;
+  children: React.ReactNode;
+  scenario?: ScenarioSummary;
+  connected?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 pt-1">
-      <span className="rounded-full bg-gradient-to-br from-brand to-pink px-4 py-2 text-sm font-bold text-white shadow-clay-sm">
-        🥨 {scenario.title}
-      </span>
-      <span className="rounded-full bg-surface px-4 py-2 text-sm font-bold text-head shadow-clay-sm">
-        Ziel <span className="font-mono">{scenario.level}</span>
-      </span>
-      <span className="ml-auto flex items-center gap-2 rounded-full bg-surface px-4 py-2 text-xs font-bold text-soft shadow-clay-sm">
-        <span
-          className={`size-2 rounded-full ${connected ? "bg-good" : "bg-hard"}`}
-          aria-hidden
-        />
-        {connected ? "Verbunden" : "Verbinde..."}
-      </span>
+    <div className="surface-warm flex h-dvh flex-col text-ink">
+      <header className="flex items-center gap-4 border-b border-line/70 px-6 py-4">
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-pink text-lg shadow-clay-sm">
+            🥨
+          </span>
+          <span className="text-lg font-extrabold tracking-tight text-head">
+            WortlAI
+          </span>
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {scenario && (
+            <>
+              <span className="rounded-full bg-surface px-4 py-2 text-sm font-bold text-head shadow-clay-sm">
+                {scenario.title}
+              </span>
+              <span className="rounded-full bg-surface px-4 py-2 font-mono text-sm font-bold text-brand shadow-clay-sm">
+                {scenario.level}
+              </span>
+              <span className="flex items-center gap-2 rounded-full bg-surface px-4 py-2 text-xs font-bold text-soft shadow-clay-sm">
+                <span
+                  className={`size-2 rounded-full ${connected ? "bg-good" : "bg-hard"}`}
+                  aria-hidden
+                />
+                {connected ? "Verbunden" : "Verbinde ..."}
+              </span>
+            </>
+          )}
+          <ThemeToggle />
+        </div>
+      </header>
+      {children}
     </div>
+  );
+}
+
+/** Manual light/dark, persisted. The tokens key off data-theme; unset falls
+ * back to the OS preference (prefers-color-scheme). */
+function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark" | null>(
+    () => (localStorage.getItem("wortl-theme") as "light" | "dark" | null) ?? null,
+  );
+
+  useEffect(() => {
+    if (!theme) return;
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("wortl-theme", theme);
+  }, [theme]);
+
+  const toggle = () =>
+    setTheme((prev) => {
+      const current =
+        prev ??
+        (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      return current === "dark" ? "light" : "dark";
+    });
+
+  const isDark =
+    theme === "dark" ||
+    (theme === null && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={isDark ? "Zu hellem Modus wechseln" : "Zu dunklem Modus wechseln"}
+      className="grid size-10 cursor-pointer place-items-center rounded-xl bg-surface text-lg shadow-clay-sm transition-[transform,box-shadow] duration-100 hover:-translate-y-0.5 hover:brightness-105 active:translate-y-0.5 active:shadow-clay-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+    >
+      {isDark ? "☀️" : "🌙"}
+    </button>
+  );
+}
+
+function SidePanel({ scenario }: { scenario: ScenarioSummary }) {
+  return (
+    <aside className="hidden w-80 shrink-0 flex-col gap-6 border-l border-line/70 bg-surface/40 p-6 lg:flex">
+      <div>
+        <p className="font-mono text-[11px] font-bold tracking-widest text-soft uppercase">
+          Szenario
+        </p>
+        <h2 className="mt-1 text-xl font-extrabold text-head">{scenario.title}</h2>
+        <p className="mt-1 text-sm font-semibold text-soft">
+          Ziel-Niveau <span className="font-mono text-brand">{scenario.level}</span>
+        </p>
+      </div>
+
+      <div>
+        <p className="font-mono text-[11px] font-bold tracking-widest text-soft uppercase">
+          Redemittel · nutze diese
+        </p>
+        <ul className="mt-3 flex flex-col gap-2">
+          {scenario.redemittel.map((chunk) => (
+            <li
+              key={chunk}
+              className="rounded-xl bg-surface px-3.5 py-2.5 text-sm font-semibold text-head shadow-clay-sm transition-transform duration-100 hover:-translate-y-0.5 hover:brightness-105"
+            >
+              {chunk}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="mt-auto rounded-xl bg-sunk px-4 py-3 text-xs font-medium text-soft shadow-clay-in">
+        Fehler kommen erst im Debrief, nie mitten im Gespraech. Sprich einfach los.
+      </p>
+    </aside>
   );
 }
 
 function Bubble({ turn }: { turn: Turn }) {
   const isYou = turn.role === "user";
   return (
-    <div className={`max-w-[82%] ${isYou ? "self-end" : "self-start"}`}>
+    <div className={`max-w-[76%] ${isYou ? "self-end" : "self-start"}`}>
       <div
-        className={`mb-1 flex items-center gap-2 px-2 font-mono text-[10px] font-bold tracking-widest text-soft uppercase ${
+        className={`mb-1.5 flex items-center gap-2 px-2 font-mono text-[11px] font-bold tracking-widest text-soft uppercase ${
           isYou ? "justify-end" : ""
         }`}
       >
         {!isYou && <span className="size-3.5 rounded-[5px] bg-brand shadow-clay-in" />}
-        {isYou ? "You" : "Tutor"}
+        {isYou ? "Du" : "Tutor"}
         {!isYou && turn.streaming && <Equaliser />}
         {isYou && <span className="size-3.5 rounded-[5px] bg-pink shadow-clay-in" />}
       </div>
       <div
-        className={`rounded-clay px-4 py-3.5 text-xl leading-relaxed font-semibold shadow-clay ${
+        className={`rounded-clay px-5 py-4 text-[22px] leading-relaxed font-semibold shadow-clay ${
           isYou
             ? "bg-gradient-to-br from-pink to-[#ff9a7a] text-white"
             : "bg-surface text-head"
         }`}
       >
-        {turn.text}
+        {turn.text || (turn.streaming ? "…" : "")}
       </div>
     </div>
   );
@@ -203,18 +320,10 @@ function errorLabel(stage: string): string {
     case "mic":
       return "Mikrofon nicht verfuegbar - Browser-Berechtigung pruefen.";
     case "socket":
-      return "Verbindung verloren - neu laden.";
+      return "Verbindung verloren - Seite neu laden.";
     case "limit":
       return "Session-Limit erreicht.";
     default:
       return "Etwas ging schief - bitte nochmal.";
   }
-}
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="surface-warm flex min-h-full flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-      {children}
-    </main>
-  );
 }
