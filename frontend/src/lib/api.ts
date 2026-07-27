@@ -24,6 +24,13 @@ export type Readiness = {
   keys_configured: KeysConfigured;
 };
 
+export type ScenarioSummary = {
+  id: string;
+  title: string;
+  level: string;
+  redemittel: string[];
+};
+
 export class ApiError extends Error {
   readonly status?: number;
 
@@ -57,4 +64,5 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<Health>("/health"),
   readiness: () => request<Readiness>("/readyz"),
+  scenarios: () => request<ScenarioSummary[]>("/api/v1/scenarios"),
 };
