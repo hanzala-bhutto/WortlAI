@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import aiosqlite
 
 from app.agents.checkpointer import checkpoints_path, open_checkpointer
+from app.agents.corrector import Corrector, CorrectorCollector
 from app.agents.graph import SessionGraphDeps, build_session_graph
 from app.agents.persistence import SessionWriter
 from app.agents.tutor import Tutor
@@ -49,13 +50,24 @@ async def build_session_runtime(settings: Settings | None = None) -> SessionRunt
     persistence uses the app's learner store."""
     settings = settings or get_settings()
     provider = LLMProvider(settings=settings, tracing=build_tracing())
+    prompt_store = build_prompt_store()
     deps = SessionGraphDeps(
         tutor=Tutor(
             provider=provider,
-            prompt_store=build_prompt_store(),
+            prompt_store=prompt_store,
             prompt_label=settings.tutor_prompt_label,
             temperature=settings.tutor_temperature,
             max_tokens=settings.tutor_max_tokens,
+        ),
+        collector=CorrectorCollector(
+            Corrector(
+                provider=provider,
+                prompt_store=prompt_store,
+                prompt_label=settings.corrector_prompt_label,
+                temperature=settings.corrector_temperature,
+                max_tokens=settings.corrector_max_tokens,
+            ),
+            severity_threshold=settings.corrector_severity_threshold,
         ),
         persister=SessionWriter(),
     )
