@@ -56,7 +56,10 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> FastAPI:
         openapi_tags=[
             {"name": "health", "description": "Liveness and readiness probes."},
             {"name": "learner", "description": "Sessions, errors and immersion hours."},
-            {"name": "session", "description": "Roleplay scenarios and the voice session loop."},
+            {
+                "name": "session",
+                "description": "Roleplay scenarios and the voice session loop.",
+            },
         ],
     )
 

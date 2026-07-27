@@ -66,12 +66,12 @@ class GroqWhisper:
 
     def _get_client(self) -> httpx2.AsyncClient:
         if self._client is None:
-            self._client = httpx2.AsyncClient(
-                timeout=httpx2.Timeout(30.0, connect=5.0)
-            )
+            self._client = httpx2.AsyncClient(timeout=httpx2.Timeout(30.0, connect=5.0))
         return self._client
 
-    async def transcribe(self, audio: bytes, *, mimetype: str = _DEFAULT_MIMETYPE) -> str:
+    async def transcribe(
+        self, audio: bytes, *, mimetype: str = _DEFAULT_MIMETYPE
+    ) -> str:
         settings = self._settings
         if not audio:
             raise STTError("empty audio")

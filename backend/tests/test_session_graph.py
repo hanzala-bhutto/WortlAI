@@ -120,9 +120,12 @@ async def test_three_turn_conversation_accumulates_messages(tmp_path):
         roles = [m["role"] for m in out["messages"]]
         assert roles == [
             "assistant",
-            "user", "assistant",
-            "user", "assistant",
-            "user", "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
         ]
         assert len(out["messages"]) == 7
         assert out["messages"][-1] == {"role": "assistant", "content": "Antwort drei."}
@@ -151,9 +154,7 @@ async def test_each_turn_sees_the_growing_history(tmp_path):
 async def test_session_resumes_after_a_restart(tmp_path):
     # Session A: setup + two turns, then the process "dies" (connection closed).
     factory = make_factory(tmp_path)
-    app_a, conn_a, _ = await build_app(
-        tmp_path, replies=["A1", "A2"], factory=factory
-    )
+    app_a, conn_a, _ = await build_app(tmp_path, replies=["A1", "A2"], factory=factory)
     await app_a.ainvoke({"scenario_id": "nachbar"}, cfg())
     await app_a.ainvoke({"user_input": "u1"}, cfg())
     out2 = await app_a.ainvoke({"user_input": "u2"}, cfg())
@@ -162,9 +163,7 @@ async def test_session_resumes_after_a_restart(tmp_path):
 
     # Restart: a brand-new checkpointer + graph over the SAME checkpoint file and
     # learner DB. The third turn must continue turns 1-2, not start over.
-    app_b, conn_b, _ = await build_app(
-        tmp_path, replies=["A3"], factory=factory
-    )
+    app_b, conn_b, _ = await build_app(tmp_path, replies=["A3"], factory=factory)
     try:
         out3 = await app_b.ainvoke({"user_input": "u3"}, cfg())
 
@@ -259,7 +258,8 @@ async def test_a_turn_without_a_new_utterance_analyses_nothing(tmp_path):
     # the previous turn's utterance, or its errors would be counted twice at debrief.
     corrector = FakeCorrector([[error_report("critical")]])
     app, conn, factory = await build_app(
-        tmp_path, replies=["Antwort eins.", "Antwort zwei."],
+        tmp_path,
+        replies=["Antwort eins.", "Antwort zwei."],
         collector=CorrectorCollector(corrector),
     )
     try:

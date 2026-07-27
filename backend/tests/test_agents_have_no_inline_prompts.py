@@ -35,7 +35,9 @@ def _docstring_nodes(tree: ast.Module) -> set[int]:
     those are not mistaken for inline prompts."""
     docstrings: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
             body = getattr(node, "body", [])
             if (
                 body

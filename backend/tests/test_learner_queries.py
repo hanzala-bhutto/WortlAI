@@ -61,9 +61,21 @@ def test_error_counts_rank_types_by_frequency(db_session):
     session = Session()
     session.errors.extend(
         [
-            ErrorLog(error_type="grammar.case", severity="critical", utterance="a", correction="b"),
-            ErrorLog(error_type="grammar.case", severity="minor", utterance="c", correction="d"),
-            ErrorLog(error_type="vocab", severity="minor", utterance="e", correction="f"),
+            ErrorLog(
+                error_type="grammar.case",
+                severity="critical",
+                utterance="a",
+                correction="b",
+            ),
+            ErrorLog(
+                error_type="grammar.case",
+                severity="minor",
+                utterance="c",
+                correction="d",
+            ),
+            ErrorLog(
+                error_type="vocab", severity="minor", utterance="e", correction="f"
+            ),
         ]
     )
     db_session.add(session)

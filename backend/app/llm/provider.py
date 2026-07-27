@@ -62,14 +62,29 @@ def _build_chain(settings: Settings) -> list[_Target]:
     chain: list[_Target] = []
     if settings.groq_api_key:
         chain.append(
-            _Target("groq", settings.groq_base_url, settings.groq_api_key, settings.llm_model_primary)
+            _Target(
+                "groq",
+                settings.groq_base_url,
+                settings.groq_api_key,
+                settings.llm_model_primary,
+            )
         )
         chain.append(
-            _Target("groq", settings.groq_base_url, settings.groq_api_key, settings.llm_model_secondary)
+            _Target(
+                "groq",
+                settings.groq_base_url,
+                settings.groq_api_key,
+                settings.llm_model_secondary,
+            )
         )
     if settings.nim_api_key:
         chain.append(
-            _Target("nim", settings.nim_base_url, settings.nim_api_key, settings.llm_model_fallback)
+            _Target(
+                "nim",
+                settings.nim_base_url,
+                settings.nim_api_key,
+                settings.llm_model_fallback,
+            )
         )
     return chain
 
@@ -114,7 +129,9 @@ class LLMProvider:
     def _chain(self) -> list[_Target]:
         chain = _build_chain(self._settings)
         if not chain:
-            raise ProviderError("No LLM provider configured: set GROQ_API_KEY or NIM_API_KEY.")
+            raise ProviderError(
+                "No LLM provider configured: set GROQ_API_KEY or NIM_API_KEY."
+            )
         return chain
 
     @staticmethod
@@ -169,9 +186,16 @@ class LLMProvider:
         ) as gen:
             for target in self._chain():
                 try:
-                    reply = await self._complete_one(target, messages, temperature, max_tokens)
+                    reply = await self._complete_one(
+                        target, messages, temperature, max_tokens
+                    )
                 except _ModelFailed as exc:
-                    logger.warning("LLM %s/%s failed, falling back: %s", target.provider, target.model, exc)
+                    logger.warning(
+                        "LLM %s/%s failed, falling back: %s",
+                        target.provider,
+                        target.model,
+                        exc,
+                    )
                     last_error = exc
                     continue
                 gen.update(output=reply, model=target.model)
@@ -191,11 +215,16 @@ class LLMProvider:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = await client.post(url, json=payload, headers=self._headers(target))
+                response = await client.post(
+                    url, json=payload, headers=self._headers(target)
+                )
                 response.raise_for_status()
                 return _extract_content(response)
             except httpx2.HTTPStatusError as exc:
-                if exc.response.status_code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
+                if (
+                    exc.response.status_code in RETRYABLE_STATUS
+                    and attempt < MAX_RETRIES
+                ):
                     await self._backoff(attempt, exc.response)
                     continue
                 raise _ModelFailed(f"HTTP {exc.response.status_code}") from exc
@@ -224,11 +253,18 @@ class LLMProvider:
             for target in self._chain():
                 chunks: list[str] = []
                 try:
-                    async for token in self._stream_one(target, messages, temperature, max_tokens):
+                    async for token in self._stream_one(
+                        target, messages, temperature, max_tokens
+                    ):
                         chunks.append(token)
                         yield token
                 except _ModelFailed as exc:
-                    logger.warning("LLM %s/%s stream failed, falling back: %s", target.provider, target.model, exc)
+                    logger.warning(
+                        "LLM %s/%s stream failed, falling back: %s",
+                        target.provider,
+                        target.model,
+                        exc,
+                    )
                     last_error = exc
                     continue
                 gen.update(output="".join(chunks), model=target.model)
@@ -249,8 +285,13 @@ class LLMProvider:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                async with client.stream("POST", url, json=payload, headers=self._headers(target)) as response:
-                    if response.status_code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
+                async with client.stream(
+                    "POST", url, json=payload, headers=self._headers(target)
+                ) as response:
+                    if (
+                        response.status_code in RETRYABLE_STATUS
+                        and attempt < MAX_RETRIES
+                    ):
                         await response.aread()
                         await self._backoff(attempt, response)
                         continue

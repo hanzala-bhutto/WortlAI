@@ -124,9 +124,7 @@ async def test_streamed_text_is_only_the_validated_reply(tmp_path):
     scenario = get_scenario("nachbar")
     chunks = []
 
-    await tutor.reply(
-        scenario=scenario, level="A2", history=[], writer=chunks.append
-    )
+    await tutor.reply(scenario=scenario, level="A2", history=[], writer=chunks.append)
 
     streamed = "".join(chunks)
     assert streamed == "Hallo, wie geht es Ihnen?"

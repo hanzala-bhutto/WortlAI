@@ -59,7 +59,12 @@ def test_missing_tunable_fails_loudly_at_boot(env, missing):
 def test_absent_api_keys_are_degraded_not_fatal(env):
     """Keys are the deliberate exception to the no-defaults rule: a missing key is
     a state /health reports, not a crash."""
-    for key in ("GROQ_API_KEY", "NIM_API_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+    for key in (
+        "GROQ_API_KEY",
+        "NIM_API_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+    ):
         env.delenv(key, raising=False)
 
     settings = Settings(_env_file=None)

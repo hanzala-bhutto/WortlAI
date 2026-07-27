@@ -42,11 +42,13 @@ def _discover(fallback_dir: Path) -> list[tuple[str, str, object]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Push bundled prompts to Langfuse.")
     parser.add_argument(
-        "--label", default="staging",
+        "--label",
+        default="staging",
         help="Label to attach to the pushed version (default: staging).",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="List what would be pushed without contacting Langfuse.",
     )
     args = parser.parse_args(argv)
