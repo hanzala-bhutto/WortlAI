@@ -1,20 +1,93 @@
 @import "tailwindcss";
 
+/*
+ * WortlAI design system - "Knete warmth on structured bones".
+ * One token set, two temperatures: warm claymorphism on emotional surfaces
+ * (Talk, Review), a flatter calm mode on dense surfaces (lists, dashboard).
+ * Tokens are runtime CSS variables (so they flip with the theme) exposed to
+ * Tailwind via @theme inline, giving utilities like bg-surface / shadow-clay.
+ */
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  --bg: #efe9fb;
+  --bg2: #f7e9f0;
+  --surface: #fdfbff;
+  --sunk: #efeafa;
+  --ink: #463d63;
+  --head: #241d38;
+  --soft: #8a80a8;
+  --line: #e6ddf5;
+
+  --brand: #8b6bff;
+  --pink: #ff7fa6;
+  --again: #ff5d6c;
+  --hard: #ff9f2e;
+  --good: #22c07f;
+  --easy: #4d9bff;
+
+  --clay: 6px 6px 14px rgba(150, 120, 200, 0.32),
+    -5px -5px 12px rgba(255, 255, 255, 0.92);
+  --clay-sm: 4px 4px 10px rgba(150, 120, 200, 0.3),
+    -3px -3px 8px rgba(255, 255, 255, 0.9);
+  --clay-in: inset 4px 4px 9px rgba(150, 120, 200, 0.3),
+    inset -4px -4px 9px rgba(255, 255, 255, 0.9);
+
+  --r: 24px;
+  --r-sm: 14px;
 }
 
+/* Dark: claymorphism's weak spot solved with soft-dark elevation (a dark
+ * ground plus a faint light edge) instead of light-ground double shadows. */
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+
+    --bg: #130f1f;
+    --bg2: #181022;
+    --surface: #221b34;
+    --sunk: #1a1428;
+    --ink: #cfc6e6;
+    --head: #f2eefb;
+    --soft: #8b81a8;
+    --line: #332a48;
+
+    --clay: 6px 6px 16px rgba(0, 0, 0, 0.55),
+      -4px -4px 12px rgba(255, 255, 255, 0.045);
+    --clay-sm: 4px 4px 11px rgba(0, 0, 0, 0.5),
+      -3px -3px 8px rgba(255, 255, 255, 0.04);
+    --clay-in: inset 4px 4px 10px rgba(0, 0, 0, 0.5),
+      inset -3px -3px 8px rgba(255, 255, 255, 0.04);
   }
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  --color-app-bg: var(--bg);
+  --color-app-bg2: var(--bg2);
+  --color-surface: var(--surface);
+  --color-sunk: var(--sunk);
+  --color-ink: var(--ink);
+  --color-head: var(--head);
+  --color-soft: var(--soft);
+  --color-line: var(--line);
+  --color-brand: var(--brand);
+  --color-pink: var(--pink);
+  --color-again: var(--again);
+  --color-hard: var(--hard);
+  --color-good: var(--good);
+  --color-easy: var(--easy);
+
+  --shadow-clay: var(--clay);
+  --shadow-clay-sm: var(--clay-sm);
+  --shadow-clay-in: var(--clay-in);
+
+  --radius-clay: var(--r);
+  --radius-clay-sm: var(--r-sm);
 }
 
 html,
@@ -29,4 +102,30 @@ body {
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The warm gradient ground the Talk / Review surfaces sit on. */
+.surface-warm {
+  background: linear-gradient(160deg, var(--bg), var(--bg2));
+}
+
+/* The tutor is "speaking" while its reply streams: a tiny equaliser. */
+@keyframes wortl-eq {
+  0%,
+  100% {
+    height: 4px;
+  }
+  50% {
+    height: 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
