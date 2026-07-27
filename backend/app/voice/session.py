@@ -10,6 +10,7 @@ Protocol (one WebSocket, JSON down, JSON control + binary audio up - see CLAUDE.
 
     up   {"type":"start","scenario_id","level"?,"thread_id"?,"rate"?}  begin a session
     up   <binary audio blob>                                          one spoken turn
+    up   {"type":"set_rate","rate"}                                   change speed mid-session
     up   {"type":"end"}                                               close + debrief
 
     down {"type":"ready","thread_id","scenario_id"}
@@ -18,7 +19,7 @@ Protocol (one WebSocket, JSON down, JSON control + binary audio up - see CLAUDE.
     down {"type":"audio","seq","mimetype","data"(b64)}  TTS, per sentence
     down {"type":"turn_done"}                            end of a turn's output
     down {"type":"error","stage","message"}             a degraded, non-fatal step
-    down {"type":"session_closed"}
+    down {"type":"session_closed","session_id"?}                     debrief follows
 
 Per-turn model: each turn is one graph invocation resumed from the checkpoint keyed
 by thread_id (setup on the first, converse after), exactly as the graph is driven in
@@ -119,10 +120,18 @@ async def run_voice_session(
                 # Tutor reply, so the same turn driver renders and speaks it.
                 await _drive_turn(ws, graph, _cfg(thread_id), setup, synthesizer, rate)
 
+            elif kind == "set_rate":
+                # Applies to every turn from here on (the Sprechtempo slider), silently
+                # keeping the current rate on a bad value - same tolerance as `start`.
+                rate = _coerce_rate(control.get("rate"), rate)
+
             elif kind == "end":
+                session_id = None
                 if thread_id is not None:
                     await graph.ainvoke({"end_requested": True}, _cfg(thread_id))
-                await ws.send_json({"type": "session_closed"})
+                    snapshot = await graph.aget_state(_cfg(thread_id))
+                    session_id = (snapshot.values or {}).get("session_id")
+                await ws.send_json({"type": "session_closed", "session_id": session_id})
                 return
 
             else:

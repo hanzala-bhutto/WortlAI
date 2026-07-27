@@ -31,6 +31,25 @@ export type ScenarioSummary = {
   redemittel: string[];
 };
 
+export type ErrorEntry = {
+  id: number;
+  error_type: string;
+  severity: string;
+  utterance: string;
+  correction: string;
+  explanation: string | null;
+  created_at: string;
+};
+
+export type SessionDebrief = {
+  id: number;
+  scenario: string | null;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  errors: ErrorEntry[];
+};
+
 export class ApiError extends Error {
   readonly status?: number;
 
@@ -65,4 +84,6 @@ export const api = {
   health: () => request<Health>("/health"),
   readiness: () => request<Readiness>("/readyz"),
   scenarios: () => request<ScenarioSummary[]>("/api/v1/scenarios"),
+  sessionDebrief: (id: number) =>
+    request<SessionDebrief>(`/api/v1/sessions/${id}`),
 };

@@ -8,12 +8,13 @@ wife-call segment, a bakery mission. This is where those get counted, so the
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session as DbSession
 
 from app.learner.db import get_db
 from app.learner.models import ImmersionLog
+from app.learner.models import Session as SessionRow
 
 router = APIRouter(tags=["learner"])
 
@@ -57,3 +58,40 @@ def log_hours(
     db.commit()
     db.refresh(entry)
     return ImmersionLogEntry.model_validate(entry)
+
+
+class ErrorEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    error_type: str
+    severity: str
+    utterance: str
+    correction: str
+    explanation: str | None
+    created_at: datetime
+
+
+class SessionDebrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    scenario: str | None
+    started_at: datetime
+    ended_at: datetime | None
+    duration_seconds: int | None
+    errors: list[ErrorEntry]
+
+
+@router.get(
+    "/sessions/{session_id}",
+    response_model=SessionDebrief,
+    summary="Fetch a session's debrief: duration and every error caught",
+)
+def get_session_debrief(
+    session_id: int, db: DbSession = Depends(get_db)
+) -> SessionDebrief:
+    session = db.get(SessionRow, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Unknown session {session_id}.")
+    return SessionDebrief.model_validate(session)

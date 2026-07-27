@@ -22,8 +22,14 @@ describe("parseDownFrame", () => {
     ).toEqual({ type: "audio", seq: 0, mimetype: "audio/mpeg", data: "AA" });
 
     expect(parseDownFrame('{"type":"turn_done"}')).toEqual({ type: "turn_done" });
+    expect(
+      parseDownFrame('{"type":"session_closed","session_id":5}'),
+    ).toEqual({ type: "session_closed", session_id: 5 });
+    // A missing session_id (e.g. the session never reached setup) degrades to
+    // null rather than dropping the frame - the session still closes.
     expect(parseDownFrame('{"type":"session_closed"}')).toEqual({
       type: "session_closed",
+      session_id: null,
     });
     expect(
       parseDownFrame('{"type":"error","stage":"stt","message":"no speech"}'),
