@@ -46,8 +46,10 @@ class FakeTutor:
 class FakeTranscriber:
     def __init__(self, transcripts):
         self._q = list(transcripts)
+        self.prompts = []
 
-    async def transcribe(self, audio, *, mimetype="audio/webm"):
+    async def transcribe(self, audio, *, mimetype="audio/webm", prompt=None):
+        self.prompts.append(prompt)
         return self._q.pop(0)
 
 
@@ -179,6 +181,70 @@ async def test_round_trip_start_turn_end(tmp_path):
         await conn.close()
 
 
+async def test_turn_transcribes_with_the_active_scenarios_redemittel_as_a_prompt(
+    tmp_path,
+):
+    graph, conn, _ = await build_graph(tmp_path, replies=["Bitte schön."])
+    try:
+        ws = FakeWS(
+            [
+                up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t1"}),
+                up_bytes(b"opus-1"),
+            ]
+        )
+        transcriber = FakeTranscriber(["Einen Kaffee bitte"])
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=transcriber,
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+        )
+
+        # Includes the opening line: it's the Tutor's first reply, streamed via
+        # _drive_turn's `setup` call before this first audio turn arrives.
+        scenario = get_scenario("cafe")
+        assert transcriber.prompts == [
+            ", ".join(scenario.redemittel) + " " + scenario.opening_line
+        ]
+    finally:
+        await conn.close()
+
+
+async def test_second_turn_biases_with_the_tutors_previous_reply(tmp_path):
+    graph, conn, _ = await build_graph(
+        tmp_path,
+        replies=[
+            "Ein Apfelsaft, bitte. Wie viele Flaschen möchten Sie?",
+            "Vier Flaschen, kommt sofort.",
+        ],
+    )
+    try:
+        ws = FakeWS(
+            [
+                up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t1"}),
+                up_bytes(b"opus-1"),
+                up_bytes(b"opus-2"),
+            ]
+        )
+        transcriber = FakeTranscriber(["Ich möchte eine Apfelsaft", "Vier bitte"])
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=transcriber,
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+        )
+
+        # The second turn's STT prompt carries the Tutor's reply to the first
+        # turn - the vocabulary (Apfelsaft, Flaschen) a hesitant learner is
+        # about to echo back and that the static Redemittel never lists.
+        assert "Apfelsaft" in transcriber.prompts[1]
+        assert "Flaschen" in transcriber.prompts[1]
+    finally:
+        await conn.close()
+
+
 class RecordingTracing:
     """Stands in for Tracing (#51): records every session_id/user_id the loop
     scopes a turn with, instead of touching real Langfuse/OTEL machinery."""
@@ -275,7 +341,7 @@ async def test_audio_before_start_is_a_protocol_error(tmp_path):
 
 async def test_stt_failure_is_reported_and_does_not_kill_the_session(tmp_path):
     class BoomSTT:
-        async def transcribe(self, audio, *, mimetype="audio/webm"):
+        async def transcribe(self, audio, *, mimetype="audio/webm", prompt=None):
             raise STTError("groq down")
 
     graph, conn, _ = await build_graph(tmp_path, replies=[])

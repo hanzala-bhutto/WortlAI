@@ -101,6 +101,45 @@ async def test_malformed_body_is_stterror():
         ).transcribe(b"a")
 
 
+async def test_prompt_is_sent_when_provided():
+    captured = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = request.content
+        return httpx2.Response(200, json={"text": "Einen Kaffee bitte"})
+
+    await transcriber_with(handler).transcribe(
+        b"opus-bytes", prompt="Ich nehme …, Einen Kaffee, bitte."
+    )
+
+    assert b"Ich nehme" in captured["body"]
+
+
+async def test_prompt_is_omitted_when_not_provided():
+    captured = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = request.content
+        return httpx2.Response(200, json={"text": "x"})
+
+    await transcriber_with(handler).transcribe(b"opus-bytes")
+
+    assert b"prompt" not in captured["body"]
+
+
+async def test_oversize_prompt_is_truncated_not_rejected():
+    captured = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = request.content
+        return httpx2.Response(200, json={"text": "x"})
+
+    huge_prompt = "wort " * 500  # far past Groq's 224-token limit
+    await transcriber_with(handler).transcribe(b"opus-bytes", prompt=huge_prompt)
+
+    assert len(captured["body"]) < len(huge_prompt) + 500  # sanity: it was cut down
+
+
 async def test_silence_transcribes_to_empty_string_not_an_error():
     # A silent utterance is a normal degraded state, not a failure: the loop prompts
     # the user to speak again rather than surfacing an error.
