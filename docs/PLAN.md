@@ -36,7 +36,7 @@ Runs **locally on Windows**, single user, free tier only.
 |---|---|---|
 | Frontend | React 19 SPA on Vite + TypeScript + TanStack Router/Query + Tailwind + shadcn/ui | Proper mic/audio UX. SSR buys nothing here (single user, localhost, mic/WebSocket screens are client-side), and the static build lets FastAPI serve the app from one origin |
 | Backend | FastAPI (Python 3.12) + uvicorn | AI ecosystem, WebSocket support |
-| STT | **Groq Whisper** `whisper-large-v3-turbo` | Free tier, fast, excellent German |
+| STT | **Groq Whisper** `whisper-large-v3` | Free tier, fast, excellent German; lower WER than `-turbo` at the same free-tier limits (#52) |
 | LLM | **Groq** `openai/gpt-oss-120b` (primary - Groq's current flagship, strong multilingual/reasoning; verified July 2026), `llama-3.3-70b-versatile` (secondary), **NVIDIA NIM** (fallback provider) | All free tier; provider abstraction layer so any works. Groq free tier: ~1,000 req/day on large models, 2,000 Whisper audio req/day - ample for one user |
 | TTS | **edge-tts** Python package (`de-DE-KatjaNeural` / `de-DE-ConradNeural`) | Free, natural German neural voices |
 | Vector DB | **Qdrant** (Docker locally; free cloud as option) | Kept on integration grounds after evidence audit: free, one container, first-class LlamaIndex support. Technically oversized for our <10k vectors - sqlite-vec is the documented minimal alternative |
