@@ -159,6 +159,10 @@ class LLMProvider:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if stream:
+            # Ask Groq's OpenAI-compatible endpoint for a final usage-only chunk;
+            # without this, streamed responses never report token counts (#58).
+            payload["stream_options"] = {"include_usage": True}
         return payload
 
     async def _backoff(self, attempt: int, response: httpx2.Response | None) -> None:
@@ -185,7 +189,7 @@ class LLMProvider:
         ) as gen:
             for target in self._chain():
                 try:
-                    reply = await self._complete_one(
+                    reply, usage = await self._complete_one(
                         target, messages, temperature, max_tokens
                     )
                 except _ModelFailed as exc:
@@ -197,7 +201,7 @@ class LLMProvider:
                     )
                     last_error = exc
                     continue
-                gen.update(output=reply, model=target.model)
+                gen.update(output=reply, model=target.model, usage_details=usage)
                 return reply
             raise ProviderError("All LLM providers failed.") from last_error
 
@@ -207,7 +211,7 @@ class LLMProvider:
         messages: list[dict[str, str]],
         temperature: float,
         max_tokens: int | None,
-    ) -> str:
+    ) -> tuple[str, dict | None]:
         url = f"{target.base_url}/chat/completions"
         payload = self._payload(target, messages, temperature, max_tokens, stream=False)
         client = self._get_client()
@@ -218,7 +222,7 @@ class LLMProvider:
                     url, json=payload, headers=self._headers(target)
                 )
                 response.raise_for_status()
-                return _extract_content(response)
+                return _extract_content(response), _extract_usage(response)
             except httpx2.HTTPStatusError as exc:
                 if (
                     exc.response.status_code in RETRYABLE_STATUS
@@ -251,9 +255,10 @@ class LLMProvider:
         ) as gen:
             for target in self._chain():
                 chunks: list[str] = []
+                usage_box: dict[str, dict | None] = {"usage": None}
                 try:
                     async for token in self._stream_one(
-                        target, messages, temperature, max_tokens
+                        target, messages, temperature, max_tokens, usage_box
                     ):
                         chunks.append(token)
                         yield token
@@ -266,7 +271,11 @@ class LLMProvider:
                     )
                     last_error = exc
                     continue
-                gen.update(output="".join(chunks), model=target.model)
+                gen.update(
+                    output="".join(chunks),
+                    model=target.model,
+                    usage_details=usage_box["usage"],
+                )
                 return
             raise ProviderError("All LLM providers failed.") from last_error
 
@@ -276,6 +285,7 @@ class LLMProvider:
         messages: list[dict[str, str]],
         temperature: float,
         max_tokens: int | None,
+        usage_box: dict[str, dict | None],
     ) -> AsyncIterator[str]:
         url = f"{target.base_url}/chat/completions"
         payload = self._payload(target, messages, temperature, max_tokens, stream=True)
@@ -295,7 +305,7 @@ class LLMProvider:
                         await self._backoff(attempt, response)
                         continue
                     response.raise_for_status()
-                    async for token in _iter_sse(response):
+                    async for token in _iter_sse(response, usage_box):
                         started = True
                         yield token
                     if not started:
@@ -330,9 +340,41 @@ def _extract_content(response: httpx2.Response) -> str:
     return content
 
 
-async def _iter_sse(response: httpx2.Response) -> AsyncIterator[str]:
+def _extract_usage(response: httpx2.Response) -> dict | None:
+    """Groq's `usage` object, remapped to Langfuse's canonical usage_details
+    keys. `None` if the body has no usage or isn't JSON; a missing usage is
+    not a model failure."""
+    try:
+        usage = response.json().get("usage")
+    except ValueError:
+        return None
+    return _to_langfuse_usage(usage)
+
+
+def _to_langfuse_usage(usage: dict | None) -> dict | None:
+    """Langfuse's own `promptTokens`/`completionTokens` display columns key off
+    `usage_details["input"]`/`["output"]` specifically - live-verified against
+    the self-hosted instance (v4.14.1 SDK / self-hosted server): passing Groq's
+    raw `prompt_tokens`/`completion_tokens`/`total_tokens` through unchanged
+    left `promptTokens`/`completionTokens` at 0 and summed all three raw keys
+    into `total` (double-counting), since the server does not alias OpenAI
+    naming to its own canonical fields. Map explicitly instead."""
+    if not usage:
+        return None
+    return {
+        "input": usage.get("prompt_tokens", 0),
+        "output": usage.get("completion_tokens", 0),
+        "total": usage.get("total_tokens", 0),
+    }
+
+
+async def _iter_sse(
+    response: httpx2.Response, usage_box: dict[str, dict | None]
+) -> AsyncIterator[str]:
     """Pull `delta.content` out of an OpenAI-style `data:`-prefixed token stream,
-    stopping at the [DONE] sentinel. Malformed lines are skipped, not fatal."""
+    stopping at the [DONE] sentinel. Malformed lines are skipped, not fatal.
+    The final chunk (requested via `stream_options.include_usage`) carries a
+    `usage` key and empty `choices`; record it in `usage_box` for the caller."""
     async for raw in response.aiter_lines():
         line = raw.strip()
         if not line.startswith("data:"):
@@ -344,6 +386,9 @@ async def _iter_sse(response: httpx2.Response) -> AsyncIterator[str]:
             chunk = json.loads(data)
         except json.JSONDecodeError:
             continue
+        usage = chunk.get("usage")
+        if usage:
+            usage_box["usage"] = _to_langfuse_usage(usage)
         choices = chunk.get("choices")
         if not choices:
             continue

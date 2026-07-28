@@ -14,6 +14,7 @@ import httpx2
 import pytest
 
 from app.llm.provider import LLMProvider, ProviderError
+from app.llmops.tracing import Tracing
 
 PRIMARY = "openai/gpt-oss-120b"
 SECONDARY = "llama-3.3-70b-versatile"
@@ -34,24 +35,60 @@ def make_settings(*, groq_key="gk", nim_key="nk"):
     )
 
 
-def chat_response(content: str) -> httpx2.Response:
-    return httpx2.Response(
-        200,
-        json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]},
-    )
+def chat_response(content: str, *, usage: dict | None = None) -> httpx2.Response:
+    body = {"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}
+    if usage is not None:
+        body["usage"] = usage
+    return httpx2.Response(200, json=body)
 
 
-def sse_response(tokens: list[str]) -> httpx2.Response:
-    """A streamed chat completion, one delta per token plus the [DONE] sentinel."""
+def sse_response(tokens: list[str], *, usage: dict | None = None) -> httpx2.Response:
+    """A streamed chat completion, one delta per token plus the [DONE] sentinel.
+    A trailing usage-only chunk (empty choices) mirrors what Groq sends when
+    `stream_options.include_usage` is requested."""
     lines = []
     for tok in tokens:
         payload = {"choices": [{"delta": {"content": tok}}]}
         lines.append(f"data: {json.dumps(payload)}\n\n")
+    if usage is not None:
+        lines.append(f"data: {json.dumps({'choices': [], 'usage': usage})}\n\n")
     lines.append("data: [DONE]\n\n")
     return httpx2.Response(200, text="".join(lines))
 
 
-def provider_with(routes, *, settings=None):
+class FakeSpan:
+    def __init__(self):
+        self.updates = []
+
+    def update(self, **kwargs):
+        self.updates.append(kwargs)
+
+
+class FakeCM:
+    def __init__(self, span):
+        self.span = span
+
+    def __enter__(self):
+        return self.span
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class FakeTracingClient:
+    """Records every generation started, so tests can inspect what the
+    provider forwarded to Langfuse (in particular, `usage_details`)."""
+
+    def __init__(self):
+        self.spans: list[FakeSpan] = []
+
+    def start_as_current_observation(self, **_kwargs):
+        span = FakeSpan()
+        self.spans.append(span)
+        return FakeCM(span)
+
+
+def provider_with(routes, *, settings=None, tracing=None):
     """Wire an LLMProvider to a MockTransport driven by `routes`: model id ->
     list of httpx2.Response, consumed one per request (last repeats). Returns the
     provider and a list that records the model of every request made, in order."""
@@ -64,7 +101,9 @@ def provider_with(routes, *, settings=None):
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    provider = LLMProvider(settings=settings or make_settings(), client=client)
+    provider = LLMProvider(
+        settings=settings or make_settings(), client=client, tracing=tracing
+    )
     return provider, calls
 
 
@@ -253,3 +292,66 @@ async def test_stream_with_no_tokens_falls_back():
 
     assert "".join(tokens) == "Dann halt"
     assert calls[-1] == SECONDARY
+
+
+async def test_complete_forwards_usage_to_tracing():
+    """Groq's raw prompt_tokens/completion_tokens/total_tokens are remapped to
+    Langfuse's canonical input/output/total keys - live-verified against the
+    self-hosted instance that passing the raw OpenAI names through leaves
+    Langfuse's promptTokens/completionTokens columns at 0 and double-counts
+    total, since the server doesn't alias OpenAI-style key names itself."""
+    usage = {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17}
+    tracing_client = FakeTracingClient()
+    provider, _ = provider_with(
+        {PRIMARY: [chat_response("Guten Tag", usage=usage)]},
+        tracing=Tracing(client=tracing_client),
+    )
+
+    await provider.complete(MESSAGES)
+
+    [span] = tracing_client.spans
+    assert span.updates[-1]["usage_details"] == {"input": 12, "output": 5, "total": 17}
+
+
+async def test_complete_with_no_usage_in_body_forwards_none():
+    tracing_client = FakeTracingClient()
+    provider, _ = provider_with(
+        {PRIMARY: [chat_response("Guten Tag")]},
+        tracing=Tracing(client=tracing_client),
+    )
+
+    await provider.complete(MESSAGES)
+
+    [span] = tracing_client.spans
+    assert span.updates[-1]["usage_details"] is None
+
+
+async def test_stream_requests_usage_and_forwards_it_to_tracing():
+    usage = {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11}
+    tracing_client = FakeTracingClient()
+    provider, calls = provider_with(
+        {PRIMARY: [sse_response(["Hallo", " Welt"], usage=usage)]},
+        tracing=Tracing(client=tracing_client),
+    )
+
+    tokens = [tok async for tok in provider.stream(MESSAGES)]
+
+    assert "".join(tokens) == "Hallo Welt"
+    assert calls == [PRIMARY]
+    [span] = tracing_client.spans
+    assert span.updates[-1]["usage_details"] == {"input": 8, "output": 3, "total": 11}
+
+
+async def test_stream_requests_include_usage_stream_option():
+    captured_payload = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured_payload.update(json.loads(request.content))
+        return sse_response(["Hi"])
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    provider = LLMProvider(settings=make_settings(), client=client)
+
+    [tok async for tok in provider.stream(MESSAGES)]
+
+    assert captured_payload["stream_options"] == {"include_usage": True}
