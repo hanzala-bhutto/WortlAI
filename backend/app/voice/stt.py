@@ -33,6 +33,11 @@ STT_LANGUAGE = "de"
 _DEFAULT_MIMETYPE = "audio/webm"
 _FILENAME = "utterance.webm"
 
+# Groq caps the transcription `prompt` at 224 tokens; ~4 chars/token is a safe
+# average for German, so this stays comfortably under the limit even for a
+# scenario with several long Redemittel joined together.
+_MAX_PROMPT_CHARS = 800
+
 
 class STTError(RuntimeError):
     """Transcription failed (transport, non-200, or an unreadable body). The caller
@@ -44,7 +49,9 @@ class Transcriber(Protocol):
     GroqWhisper in production and by a fake in tests, so the loop never needs a
     network or a real key to be exercised."""
 
-    async def transcribe(self, audio: bytes, *, mimetype: str = ...) -> str: ...
+    async def transcribe(
+        self, audio: bytes, *, mimetype: str = ..., prompt: str | None = None
+    ) -> str: ...
 
 
 class GroqWhisper:
@@ -70,7 +77,11 @@ class GroqWhisper:
         return self._client
 
     async def transcribe(
-        self, audio: bytes, *, mimetype: str = _DEFAULT_MIMETYPE
+        self,
+        audio: bytes,
+        *,
+        mimetype: str = _DEFAULT_MIMETYPE,
+        prompt: str | None = None,
     ) -> str:
         settings = self._settings
         if not audio:
@@ -93,6 +104,11 @@ class GroqWhisper:
             "response_format": "json",
             "temperature": "0",
         }
+        if prompt:
+            # Biases spelling/vocabulary toward the scenario's Redemittel (the
+            # chunks most likely to appear half-finished in a hesitant
+            # utterance), not a hard constraint but free to send.
+            data["prompt"] = prompt[:_MAX_PROMPT_CHARS]
         headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
 
         client = self._get_client()

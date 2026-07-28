@@ -20,7 +20,7 @@ FastAPI backend
 ## Stack decisions (audited, don't re-litigate without new evidence)
 
 - LLM: Groq `openai/gpt-oss-120b` primary, `llama-3.3-70b-versatile` secondary, NVIDIA NIM fallback. All free tier.
-- STT: Groq `whisper-large-v3-turbo`, batch only (no streaming STT on free tier). TTS: `edge-tts` German voices, fallback Qwen3-TTS.
+- STT: Groq `whisper-large-v3`, batch only (no streaming STT on free tier; swapped from `-turbo` in #52 for lower WER at the same free-tier limits). TTS: `edge-tts` German voices, fallback Qwen3-TTS.
 - Qdrant kept for the LlamaIndex integration, not performance. Corpus is under 10k vectors; sqlite-vec is the minimal alternative.
 - No Neo4j. All graph queries are 1-2 hops over under 10k nodes, so SQLite typed-edge tables (`word_links`, `error_pattern_links`) suffice.
 - LangGraph for session orchestration, LlamaIndex for ingestion and retrieval. CrewAI, AutoGen and Vertex AI rejected.

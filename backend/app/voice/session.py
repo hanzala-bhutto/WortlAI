@@ -70,6 +70,8 @@ async def run_voice_session(
     settings = settings or get_settings()
     tracing = tracing or Tracing(client=None)
     thread_id: str | None = None
+    scenario_id: str | None = None
+    last_reply: str | None = None
     rate = 1.0
     turns = 0
 
@@ -124,7 +126,7 @@ async def run_voice_session(
                 with tracing.session(
                     session_id=thread_id, user_id=settings.langfuse_user_id
                 ):
-                    await _drive_turn(
+                    last_reply = await _drive_turn(
                         ws, graph, _cfg(thread_id), setup, synthesizer, rate
                     )
 
@@ -166,7 +168,9 @@ async def run_voice_session(
                 return
 
             try:
-                transcript = await transcriber.transcribe(audio)
+                transcript = await transcriber.transcribe(
+                    audio, prompt=_redemittel_prompt(scenario_id, last_reply)
+                )
             except STTError as exc:
                 await ws.send_json(
                     {"type": "error", "stage": "stt", "message": str(exc)}
@@ -185,7 +189,7 @@ async def run_voice_session(
             with tracing.session(
                 session_id=thread_id, user_id=settings.langfuse_user_id
             ):
-                await _drive_turn(
+                last_reply = await _drive_turn(
                     ws,
                     graph,
                     _cfg(thread_id),
@@ -205,6 +209,28 @@ def _scenario_exists(scenario_id: str) -> bool:
         return True
     except KeyError:
         return False
+
+
+def _redemittel_prompt(scenario_id: str | None, last_reply: str | None) -> str | None:
+    """Bias STT toward the scenario's Redemittel plus the Tutor's last reply
+    (#52). The static Redemittel only covers a scenario's fixed opening chunks;
+    live testing showed the words a learner actually echoes back and mangles
+    are often ones the Tutor introduced mid-conversation (a price, an item, a
+    payment word) that never appear in that fixed list. None if there is no
+    scenario yet and no prior reply to bias with."""
+    parts = []
+    if scenario_id is not None:
+        try:
+            scenario = get_scenario(scenario_id)
+        except KeyError:
+            scenario = None
+        if scenario is not None and scenario.redemittel:
+            parts.append(", ".join(scenario.redemittel))
+    if last_reply:
+        parts.append(last_reply)
+    if not parts:
+        return None
+    return " ".join(parts)
 
 
 def _coerce_rate(value: object, default: float) -> float:
@@ -227,20 +253,27 @@ async def _drive_turn(
     graph_input: dict,
     synthesizer: Synthesizer,
     rate: float,
-) -> None:
+) -> str:
     """Run one graph turn, streaming its reply chunks to the client and speaking it
     a sentence at a time. TTS fires as soon as a sentence completes, so audio for a
     sentence can play while the next is still being synthesised.
 
     A turn that blows up (e.g. every LLM provider is down) is a normal path
     (guardrail #4): it degrades to an error frame and a turn_done, so the session
-    stays alive for the next utterance rather than the socket tearing down."""
+    stays alive for the next utterance rather than the socket tearing down.
+
+    Returns the full reply text (whatever streamed before a failure, if any) so
+    the caller can feed it back into the next turn's STT prompt bias (#52) - the
+    Tutor's own words are exactly the vocabulary a learner echoes and a hesitant
+    utterance is most likely to mangle."""
     buffer = ""
+    full_reply: list[str] = []
     seq = 0
     try:
         async for chunk in graph.astream(graph_input, cfg, stream_mode="custom"):
             await ws.send_json({"type": "reply_token", "text": chunk})
             buffer += chunk
+            full_reply.append(chunk)
             ready, buffer = _pop_complete_sentences(buffer)
             for sentence in ready:
                 seq = await _speak(ws, synthesizer, sentence, rate, seq)
@@ -257,6 +290,7 @@ async def _drive_turn(
             }
         )
     await ws.send_json({"type": "turn_done"})
+    return "".join(full_reply)
 
 
 async def _speak(

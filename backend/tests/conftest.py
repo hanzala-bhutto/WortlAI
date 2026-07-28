@@ -15,7 +15,7 @@ os.environ.setdefault("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 os.environ.setdefault("LLM_MODEL_PRIMARY", "openai/gpt-oss-120b")
 os.environ.setdefault("LLM_MODEL_SECONDARY", "llama-3.3-70b-versatile")
 os.environ.setdefault("LLM_MODEL_FALLBACK", "meta/llama-3.3-70b-instruct")
-os.environ.setdefault("STT_MODEL", "whisper-large-v3-turbo")
+os.environ.setdefault("STT_MODEL", "whisper-large-v3")
 os.environ.setdefault("TTS_VOICE", "de-DE-KatjaNeural")
 os.environ.setdefault("CORS_ORIGINS", '["http://localhost:3001"]')
 
