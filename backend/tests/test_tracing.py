@@ -8,6 +8,8 @@ turning each into a log line, never an exception the caller sees.
 Runs against a fake client, so no network and no real OpenTelemetry.
 """
 
+from opentelemetry import context as otel_context_api
+
 from app.llmops.tracing import Tracing
 
 
@@ -115,3 +117,69 @@ def test_flush_errors_are_swallowed():
             raise RuntimeError("cannot flush")
 
     Tracing(client=BoomClient()).flush()  # must not raise
+
+
+def test_disabled_session_is_a_noop_and_never_raises():
+    tracing = Tracing(client=None)
+
+    with tracing.session(session_id="thread-1", user_id="hanzala"):
+        pass  # must not raise, and must not tag the OTEL context
+
+    assert otel_context_api.get_value("langfuse.propagated.session_id") is None
+
+
+def test_enabled_session_propagates_session_and_user_id():
+    tracing = Tracing(client=FakeClient(FakeCM(FakeSpan())))
+
+    with tracing.session(session_id="thread-1", user_id="hanzala"):
+        assert (
+            otel_context_api.get_value("langfuse.propagated.session_id") == "thread-1"
+        )
+        assert otel_context_api.get_value("langfuse.propagated.user_id") == "hanzala"
+
+    # The tag does not leak past the block.
+    assert otel_context_api.get_value("langfuse.propagated.session_id") is None
+
+
+def test_session_survives_a_child_task_created_inside_the_block():
+    """The Corrector's fire-and-forget analysis task is created inside a turn's
+    `tracing.session(...)` block; contextvars snapshot at task-creation time, so
+    it must still see the propagated session_id even though it runs after the
+    parent block has (or hasn't yet) exited."""
+    import asyncio
+
+    tracing = Tracing(client=FakeClient(FakeCM(FakeSpan())))
+    seen = {}
+
+    async def _child():
+        seen["session_id"] = otel_context_api.get_value(
+            "langfuse.propagated.session_id"
+        )
+
+    async def _run():
+        with tracing.session(session_id="thread-2", user_id="hanzala"):
+            task = asyncio.create_task(_child())
+            await task
+
+    asyncio.run(_run())
+    assert seen["session_id"] == "thread-2"
+
+
+def test_session_start_errors_degrade_to_noop():
+    class BoomOnEnter:
+        def __enter__(self):
+            raise RuntimeError("enter boom")
+
+        def __exit__(self, *_exc):
+            return False
+
+    tracing = Tracing(client=FakeClient(FakeCM(FakeSpan())))
+    import app.llmops.tracing as tracing_module
+
+    original = tracing_module.propagate_attributes
+    tracing_module.propagate_attributes = lambda **_kwargs: BoomOnEnter()
+    try:
+        with tracing.session(session_id="thread-1"):
+            pass  # must not raise
+    finally:
+        tracing_module.propagate_attributes = original
