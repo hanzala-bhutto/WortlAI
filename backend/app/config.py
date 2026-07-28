@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     langfuse_base_url: str
     qdrant_url: str
 
+    # Single-user app (#51): every trace is tagged with this id so Langfuse's
+    # Sessions view can filter by user, even though there's only one learner.
+    langfuse_user_id: str = "hanzala"
+
     # OpenAI-compatible chat endpoints. Both providers speak the same schema, so
     # the provider layer is one client over these base URLs.
     groq_base_url: str
