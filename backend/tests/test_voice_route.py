@@ -17,7 +17,7 @@ from app.api.v1.voice import voice_stream
 def _app():
     return SimpleNamespace(
         state=SimpleNamespace(
-            session_runtime=SimpleNamespace(graph=object()),
+            session_runtime=SimpleNamespace(graph=object(), tracing=object()),
             voice_pipeline=SimpleNamespace(transcriber=object(), synthesizer=object()),
         )
     )

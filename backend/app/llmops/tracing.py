@@ -11,6 +11,8 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from langfuse import propagate_attributes
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +80,34 @@ class Tracing:
                 cm.__exit__(None, None, None)
             except Exception as exc:
                 logger.warning("Trace close failed, ignoring: %s", exc)
+
+    @contextmanager
+    def session(self, *, session_id: str, user_id: str | None = None) -> Iterator[None]:
+        """Tag every span/generation created inside this block with
+        session_id/user_id (#51), so a conversation's traces group under one
+        session in the Langfuse UI. Propagation is OTEL baggage/context, which
+        survives `asyncio.create_task()` boundaries - the Corrector's
+        fire-and-forget analysis task, created inside a turn, inherits the tag
+        without needing session_id threaded through its own call signature."""
+        if self._client is None:
+            yield
+            return
+
+        try:
+            cm = propagate_attributes(session_id=session_id, user_id=user_id)
+            cm.__enter__()
+        except Exception as exc:
+            logger.warning("Session tracing disabled for this turn: %s", exc)
+            yield
+            return
+
+        try:
+            yield
+        finally:
+            try:
+                cm.__exit__(None, None, None)
+            except Exception as exc:
+                logger.warning("Session trace close failed, ignoring: %s", exc)
 
     def flush(self) -> None:
         """Send pending spans. Call at shutdown / end of a short-lived request."""

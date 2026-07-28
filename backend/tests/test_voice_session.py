@@ -74,7 +74,11 @@ class FakeWS:
 
 
 def _settings(**over):
-    base = {"voice_max_turns": 60, "voice_rate_default": 1.0}
+    base = {
+        "voice_max_turns": 60,
+        "voice_rate_default": 1.0,
+        "langfuse_user_id": "hanzala",
+    }
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -171,6 +175,78 @@ async def test_round_trip_start_turn_end(tmp_path):
         with factory() as db:
             rows = db.query(Session).all()
             assert len(rows) == 1 and rows[0].ended_at is not None
+    finally:
+        await conn.close()
+
+
+class RecordingTracing:
+    """Stands in for Tracing (#51): records every session_id/user_id the loop
+    scopes a turn with, instead of touching real Langfuse/OTEL machinery."""
+
+    def __init__(self):
+        self.calls = []
+
+    def session(self, *, session_id, user_id=None):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            self.calls.append((session_id, user_id))
+            yield
+
+        return _cm()
+
+
+async def test_every_turn_is_scoped_to_the_thread_id_for_tracing(tmp_path):
+    graph, conn, _ = await build_graph(tmp_path, replies=["Guten Tag!", "Bitte schön."])
+    try:
+        ws = FakeWS(
+            [
+                up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t1"}),
+                up_bytes(b"opus-1"),
+                up_text({"type": "end"}),
+            ]
+        )
+        tracing = RecordingTracing()
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["Einen Kaffee bitte"]),
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+            tracing=tracing,
+        )
+
+        # Setup, the user's turn, and end all scoped to the same thread_id/user_id -
+        # this is what lets Langfuse group a whole conversation under one session.
+        assert tracing.calls == [
+            ("t1", "hanzala"),
+            ("t1", "hanzala"),
+            ("t1", "hanzala"),
+        ]
+    finally:
+        await conn.close()
+
+
+async def test_no_tracing_arg_defaults_to_a_disabled_noop(tmp_path):
+    """run_voice_session must work without a tracing kwarg at all - the default
+    is a disabled Tracing(), not a crash on the missing dependency."""
+    graph, conn, _ = await build_graph(tmp_path, replies=["Guten Tag!"])
+    try:
+        ws = FakeWS(
+            [
+                up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t1"}),
+                up_text({"type": "end"}),
+            ]
+        )
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+        )
+        assert _types(ws)[-1] == "session_closed"
     finally:
         await conn.close()
 
