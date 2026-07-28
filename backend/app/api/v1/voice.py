@@ -29,6 +29,7 @@ async def voice_stream(ws: WebSocket) -> None:
             graph=runtime.graph,
             transcriber=pipeline.transcriber,
             synthesizer=pipeline.synthesizer,
+            tracing=runtime.tracing,
         )
     except WebSocketDisconnect:
         # Normal: the browser closed the tab or dropped the mic. The checkpoint

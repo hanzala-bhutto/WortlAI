@@ -26,12 +26,13 @@ from app.agents.tutor import Tutor
 from app.config import Settings, get_settings
 from app.llm.provider import LLMProvider
 from app.llmops.prompts import build_prompt_store
-from app.llmops.tracing import build_tracing
+from app.llmops.tracing import Tracing, build_tracing
 
 
 @dataclass
 class SessionRuntime:
     graph: object  # a compiled LangGraph; typed loosely to avoid a hard import here
+    tracing: Tracing  # shared with the provider's tracing; used to scope traces per session (#51)
     _provider: LLMProvider
     _conn: aiosqlite.Connection
 
@@ -49,7 +50,8 @@ async def build_session_runtime(settings: Settings | None = None) -> SessionRunt
     is unconfigured); prompts come from the store (Langfuse + bundled fallback);
     persistence uses the app's learner store."""
     settings = settings or get_settings()
-    provider = LLMProvider(settings=settings, tracing=build_tracing())
+    tracing = build_tracing()
+    provider = LLMProvider(settings=settings, tracing=tracing)
     prompt_store = build_prompt_store()
     deps = SessionGraphDeps(
         tutor=Tutor(
@@ -73,4 +75,4 @@ async def build_session_runtime(settings: Settings | None = None) -> SessionRunt
     )
     saver, conn = await open_checkpointer(checkpoints_path(settings))
     graph = build_session_graph(deps).compile(checkpointer=saver)
-    return SessionRuntime(graph=graph, _provider=provider, _conn=conn)
+    return SessionRuntime(graph=graph, tracing=tracing, _provider=provider, _conn=conn)

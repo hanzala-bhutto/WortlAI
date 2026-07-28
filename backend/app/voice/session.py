@@ -38,6 +38,7 @@ from uuid import uuid4
 
 from app.agents.scenarios import get_scenario
 from app.config import Settings, get_settings
+from app.llmops.tracing import Tracing
 from app.voice.stt import STTError, Transcriber
 from app.voice.tts import AUDIO_MIMETYPE, Synthesizer, split_sentences
 
@@ -63,9 +64,11 @@ async def run_voice_session(
     transcriber: Transcriber,
     synthesizer: Synthesizer,
     settings: Settings | None = None,
+    tracing: Tracing | None = None,
 ) -> None:
     """Drive one voice session to completion (client disconnect or an `end`)."""
     settings = settings or get_settings()
+    tracing = tracing or Tracing(client=None)
     thread_id: str | None = None
     rate = 1.0
     turns = 0
@@ -118,7 +121,12 @@ async def run_voice_session(
                     setup["level"] = control["level"]
                 # The opening line streams out of the setup node's writer just like a
                 # Tutor reply, so the same turn driver renders and speaks it.
-                await _drive_turn(ws, graph, _cfg(thread_id), setup, synthesizer, rate)
+                with tracing.session(
+                    session_id=thread_id, user_id=settings.langfuse_user_id
+                ):
+                    await _drive_turn(
+                        ws, graph, _cfg(thread_id), setup, synthesizer, rate
+                    )
 
             elif kind == "set_rate":
                 # Applies to every turn from here on (the Sprechtempo slider), silently
@@ -128,8 +136,11 @@ async def run_voice_session(
             elif kind == "end":
                 session_id = None
                 if thread_id is not None:
-                    await graph.ainvoke({"end_requested": True}, _cfg(thread_id))
-                    snapshot = await graph.aget_state(_cfg(thread_id))
+                    with tracing.session(
+                        session_id=thread_id, user_id=settings.langfuse_user_id
+                    ):
+                        await graph.ainvoke({"end_requested": True}, _cfg(thread_id))
+                        snapshot = await graph.aget_state(_cfg(thread_id))
                     session_id = (snapshot.values or {}).get("session_id")
                 await ws.send_json({"type": "session_closed", "session_id": session_id})
                 return
@@ -171,14 +182,17 @@ async def run_voice_session(
             await ws.send_json(
                 {"type": "transcript", "role": "user", "text": transcript}
             )
-            await _drive_turn(
-                ws,
-                graph,
-                _cfg(thread_id),
-                {"user_input": transcript},
-                synthesizer,
-                rate,
-            )
+            with tracing.session(
+                session_id=thread_id, user_id=settings.langfuse_user_id
+            ):
+                await _drive_turn(
+                    ws,
+                    graph,
+                    _cfg(thread_id),
+                    {"user_input": transcript},
+                    synthesizer,
+                    rate,
+                )
 
 
 def _cfg(thread_id: str) -> dict:
