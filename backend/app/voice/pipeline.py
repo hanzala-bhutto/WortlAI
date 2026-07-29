@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
+from app.llmops.tracing import Tracing, build_tracing
 from app.voice.stt import GroqWhisper, Transcriber
 from app.voice.tts import EdgeTTS, Synthesizer
 
@@ -26,10 +27,13 @@ class VoicePipeline:
             await close()
 
 
-def build_voice_pipeline(settings: Settings | None = None) -> VoicePipeline:
+def build_voice_pipeline(
+    settings: Settings | None = None, tracing: Tracing | None = None
+) -> VoicePipeline:
     settings = settings or get_settings()
+    tracing = tracing or build_tracing()
     return VoicePipeline(
-        transcriber=GroqWhisper(settings=settings),
+        transcriber=GroqWhisper(settings=settings, tracing=tracing),
         synthesizer=EdgeTTS(
             voice=settings.tts_voice,
             rate_min=settings.voice_rate_min,

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 
+from app.llmops.tracing import Tracing
 from app.voice.stt import GroqWhisper, STTError
 
 
@@ -24,9 +25,45 @@ def make_settings(*, groq_key="gk", max_bytes=2_000_000):
     )
 
 
-def transcriber_with(handler, *, settings=None):
+class FakeSpan:
+    def __init__(self):
+        self.updates = []
+
+    def update(self, **kwargs):
+        self.updates.append(kwargs)
+
+
+class FakeCM:
+    def __init__(self, span):
+        self.span = span
+
+    def __enter__(self):
+        return self.span
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class FakeTracingClient:
+    """Records every generation started, so tests can inspect what STT
+    forwarded to Langfuse."""
+
+    def __init__(self):
+        self.spans: list[FakeSpan] = []
+        self.starts: list[dict] = []
+
+    def start_as_current_observation(self, **kwargs):
+        self.starts.append(kwargs)
+        span = FakeSpan()
+        self.spans.append(span)
+        return FakeCM(span)
+
+
+def transcriber_with(handler, *, settings=None, tracing=None):
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    return GroqWhisper(settings=settings or make_settings(), client=client)
+    return GroqWhisper(
+        settings=settings or make_settings(), client=client, tracing=tracing
+    )
 
 
 async def test_transcribe_returns_trimmed_german_text():
@@ -147,3 +184,41 @@ async def test_silence_transcribes_to_empty_string_not_an_error():
         lambda r: httpx2.Response(200, json={"text": "   "})
     ).transcribe(b"a")
     assert text == ""
+
+
+async def test_success_records_a_span_with_metadata_and_output_not_raw_audio():
+    tracing_client = FakeTracingClient()
+    t = transcriber_with(
+        lambda r: httpx2.Response(200, json={"text": "Guten Tag"}),
+        tracing=Tracing(client=tracing_client),
+    )
+
+    text = await t.transcribe(b"opus-bytes", mimetype="audio/webm")
+
+    assert text == "Guten Tag"
+    [start] = tracing_client.starts
+    assert start["name"] == "stt.transcribe"
+    assert start["model"] == "whisper-large-v3-turbo"
+    # Metadata only - byte count and mimetype - never the audio bytes themselves.
+    assert start["input"] == {
+        "audio_bytes": len(b"opus-bytes"),
+        "mimetype": "audio/webm",
+    }
+    [span] = tracing_client.spans
+    assert span.updates[-1]["output"] == "Guten Tag"
+
+
+async def test_failed_transcription_still_records_a_span():
+    tracing_client = FakeTracingClient()
+    t = transcriber_with(
+        lambda r: httpx2.Response(429, json={"e": "rate"}),
+        tracing=Tracing(client=tracing_client),
+    )
+
+    with pytest.raises(STTError):
+        await t.transcribe(b"a")
+
+    # A gap-free timeline: the span exists even though the call failed, and it
+    # is marked as an error rather than silently closing clean.
+    [span] = tracing_client.spans
+    assert span.updates[-1]["level"] == "ERROR"
