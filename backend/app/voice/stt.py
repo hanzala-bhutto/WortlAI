@@ -23,6 +23,7 @@ from typing import Protocol
 import httpx2
 
 from app.config import Settings, get_settings
+from app.llmops.tracing import Tracing
 
 # Whisper is multilingual; pinning German both improves accuracy on A2 speech and
 # stops it "helpfully" translating a hesitant German utterance into English.
@@ -61,10 +62,14 @@ class GroqWhisper:
         self,
         settings: Settings | None = None,
         client: httpx2.AsyncClient | None = None,
+        tracing: Tracing | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._client = client
         self._owns_client = client is None
+        # Defaults to a disabled no-op; the app wires build_tracing() so every
+        # transcription is traced.
+        self._tracing = tracing or Tracing(client=None)
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
@@ -82,6 +87,31 @@ class GroqWhisper:
         *,
         mimetype: str = _DEFAULT_MIMETYPE,
         prompt: str | None = None,
+    ) -> str:
+        # Metadata only, never the audio bytes themselves (guardrail #6): size and
+        # mimetype are the useful facts, and both are already computed for the
+        # max_utterance_bytes cap below.
+        with self._tracing.generation(
+            name="stt.transcribe",
+            input={"audio_bytes": len(audio), "mimetype": mimetype},
+            model=self._settings.stt_model,
+        ) as gen:
+            try:
+                text = await self._do_transcribe(
+                    audio, mimetype=mimetype, prompt=prompt
+                )
+            except STTError as exc:
+                gen.update(level="ERROR", status_message=str(exc))
+                raise
+            gen.update(output=text)
+            return text
+
+    async def _do_transcribe(
+        self,
+        audio: bytes,
+        *,
+        mimetype: str,
+        prompt: str | None,
     ) -> str:
         settings = self._settings
         if not audio:
