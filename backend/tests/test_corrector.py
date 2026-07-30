@@ -14,9 +14,12 @@ Everything runs against a fake completer and the real offline PromptStore, so no
 network is touched and the behaviour described is ours, not the model's.
 """
 
+import logging
 from types import SimpleNamespace
 
 from app.agents.corrector import (
+    DEFAULT_MAX_TOKENS,
+    REASONING_EFFORT,
     Corrector,
     ErrorReport,
     meets_threshold,
@@ -32,10 +35,15 @@ class FakeCompleter:
         self._replies = list(replies)
         self.calls = []
 
-    async def complete(self, messages, *, temperature=0.7, max_tokens=None):
+    async def complete(
+        self, messages, *, temperature=0.7, max_tokens=None, reasoning_effort=None
+    ):
         self.calls.append(
             SimpleNamespace(
-                messages=messages, temperature=temperature, max_tokens=max_tokens
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
             )
         )
         return self._replies.pop(0)
@@ -119,6 +127,81 @@ async def test_analyze_drops_and_does_not_raise_on_persistent_garbage(tmp_path):
 
     assert reports == []  # dropped, not raised
     assert len(provider.calls) == 2  # tried exactly twice, no infinite retry
+
+
+# A multi-error batch shaped like the truncation reports from #59: several error
+# objects with full explanations, long enough that at the old 512-token ceiling the
+# model's hidden reasoning plus this payload would not both have fit.
+MULTI_ERROR = (
+    '{"errors": ['
+    '{"error_type": "grammar.case.dative", "severity": "minor", '
+    '"utterance": "mit der Hund", "correction": "mit dem Hund", '
+    '"explanation": "Nach der Praeposition mit steht immer der Dativ, '
+    'nicht der Nominativ oder Akkusativ."}, '
+    '{"error_type": "vocab.false-friend", "severity": "critical", '
+    '"utterance": "Ich bin so embarrassed", "correction": "Es ist mir peinlich", '
+    '"explanation": "Embarrassed ist Englisch, kein deutsches Wort, und '
+    'stoert die Verstaendlichkeit."}, '
+    '{"error_type": "syntax.word-order", "severity": "minor", '
+    '"utterance": "Ich gehe heute nicht zur Arbeit weil ich bin krank", '
+    '"correction": "Ich gehe heute nicht zur Arbeit, weil ich krank bin", '
+    '"explanation": "Im Nebensatz nach weil steht das konjugierte Verb am Ende."}'
+    "]}"
+)
+
+# Cut off mid-value with no closing braces at all, the same shape as the two
+# sessions reproduced in #59 (truncated at 189 and 230 chars respectively).
+TRUNCATED = (
+    '{"errors": [{"error_type": "grammar.case.dative", "severity": "minor", '
+    '"utterance": "mit der Hund", "correction": "mit dem'
+)
+
+
+async def test_analyze_requests_low_reasoning_effort_and_raised_max_tokens(tmp_path):
+    corrector, provider = make_corrector(tmp_path, [ONE_ERROR])
+
+    await corrector.analyze(utterance="Ich gehe mit der Hund.")
+
+    assert provider.calls[0].reasoning_effort == REASONING_EFFORT
+    assert provider.calls[0].max_tokens == DEFAULT_MAX_TOKENS == 1024
+
+
+async def test_analyze_succeeds_on_a_multi_error_reply_within_the_raised_limit(
+    tmp_path,
+):
+    # Regression for #59: a multi-error JSON payload this size would not have fit
+    # in the old 512-token ceiling alongside the model's hidden reasoning.
+    corrector, provider = make_corrector(tmp_path, [MULTI_ERROR])
+
+    reports = await corrector.analyze(utterance="Ich gehe mit der Hund.")
+
+    assert len(reports) == 3
+    assert len(provider.calls) == 1  # first attempt succeeds, no retry needed
+
+
+async def test_analyze_logs_truncation_distinctly_from_other_malformed_output(
+    tmp_path, caplog
+):
+    corrector, provider = make_corrector(tmp_path, [TRUNCATED, TRUNCATED])
+
+    with caplog.at_level(logging.WARNING):
+        reports = await corrector.analyze(utterance="Ich gehe mit der Hund.")
+
+    assert reports == []
+    assert any("likely truncated" in record.message for record in caplog.records)
+
+
+async def test_analyze_logs_generic_malformed_output_when_not_truncated(
+    tmp_path, caplog
+):
+    corrector, provider = make_corrector(tmp_path, ["garbage one", "garbage two"])
+
+    with caplog.at_level(logging.WARNING):
+        reports = await corrector.analyze(utterance="Ich gehe mit der Hund.")
+
+    assert reports == []
+    assert any("failed validation twice" in record.message for record in caplog.records)
+    assert not any("likely truncated" in record.message for record in caplog.records)
 
 
 async def test_analyze_drops_a_batch_with_an_invalid_severity(tmp_path):

@@ -355,3 +355,35 @@ async def test_stream_requests_include_usage_stream_option():
     [tok async for tok in provider.stream(MESSAGES)]
 
     assert captured_payload["stream_options"] == {"include_usage": True}
+
+
+async def test_complete_forwards_reasoning_effort_when_set():
+    """A caller that opts in (Corrector, #59) gets it on the wire; a caller that
+    doesn't pass nothing extra, so Tutor's calls are unaffected."""
+    captured_payload = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured_payload.update(json.loads(request.content))
+        return chat_response("Guten Tag")
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    provider = LLMProvider(settings=make_settings(), client=client)
+
+    await provider.complete(MESSAGES, reasoning_effort="low")
+
+    assert captured_payload["reasoning_effort"] == "low"
+
+
+async def test_complete_omits_reasoning_effort_by_default():
+    captured_payload = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured_payload.update(json.loads(request.content))
+        return chat_response("Guten Tag")
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    provider = LLMProvider(settings=make_settings(), client=client)
+
+    await provider.complete(MESSAGES)
+
+    assert "reasoning_effort" not in captured_payload
