@@ -29,6 +29,7 @@ route proves the round-trip and the sentence-level pipelining with the real grap
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -48,6 +49,23 @@ logger = logging.getLogger(__name__)
 # end of the buffer so far. A trailing fragment with no terminator stays buffered,
 # so a sentence is never split across two TTS calls mid-word.
 _TERMINATOR = re.compile(r"[.!?…]+(?=\s|$)")
+
+# Holds references to fire-and-forget flush tasks (#55) so they aren't garbage
+# collected mid-flight - asyncio only keeps a weak reference to a bare
+# create_task() result.
+_pending_flushes: set[asyncio.Task] = set()
+
+
+def _schedule_flush(tracing: Tracing) -> None:
+    """Send this turn's spans to Langfuse without blocking the voice loop on the
+    network round-trip (guardrail #4). `Tracing.flush()` is a synchronous call
+    into the SDK, so it runs on a worker thread; any SDK error it raises is
+    already swallowed inside `flush()` itself."""
+    if not tracing.enabled:
+        return
+    task = asyncio.create_task(asyncio.to_thread(tracing.flush))
+    _pending_flushes.add(task)
+    task.add_done_callback(_pending_flushes.discard)
 
 
 class WSLike(Protocol):
@@ -127,7 +145,7 @@ async def run_voice_session(
                     session_id=thread_id, user_id=settings.langfuse_user_id
                 ):
                     last_reply = await _drive_turn(
-                        ws, graph, _cfg(thread_id), setup, synthesizer, rate
+                        ws, graph, _cfg(thread_id), setup, synthesizer, rate, tracing
                     )
 
             elif kind == "set_rate":
@@ -196,6 +214,7 @@ async def run_voice_session(
                     {"user_input": transcript},
                     synthesizer,
                     rate,
+                    tracing,
                 )
 
 
@@ -253,6 +272,7 @@ async def _drive_turn(
     graph_input: dict,
     synthesizer: Synthesizer,
     rate: float,
+    tracing: Tracing,
 ) -> str:
     """Run one graph turn, streaming its reply chunks to the client and speaking it
     a sentence at a time. TTS fires as soon as a sentence completes, so audio for a
@@ -290,6 +310,9 @@ async def _drive_turn(
             }
         )
     await ws.send_json({"type": "turn_done"})
+    # #55: without this, spans from this turn sit in the Langfuse SDK's OTEL
+    # batch processor until the process exits - a live session shows nothing.
+    _schedule_flush(tracing)
     return "".join(full_reply)
 
 
