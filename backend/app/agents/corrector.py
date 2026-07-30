@@ -47,8 +47,18 @@ CORRECTOR_PROMPT_NAME = "corrector-system"
 # Guardrail #3: cap tokens so a runaway analysis can't burn the free tier. A report
 # for one short utterance is small; this is a ceiling. Temperature 0 because we want
 # stable, repeatable error detection, not variety.
-DEFAULT_MAX_TOKENS = 512
+#
+# gpt-oss-120b is a reasoning model: hidden chain-of-thought is billed against this
+# same budget before the visible JSON, which truncated short single-error replies at
+# the old 512 (#59). 1024 gives headroom on top of REASONING_EFFORT below, which
+# trims - but does not eliminate - how much CoT the model emits.
+DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 0.0
+
+# A correction report is short, mechanical classification, not a task that benefits
+# from deep reasoning - "low" cuts hidden CoT token spend on both the first attempt
+# and the retry (#59).
+REASONING_EFFORT = "low"
 
 Severity = Literal["critical", "minor"]
 
@@ -99,6 +109,16 @@ class CorrectorOutput(BaseModel):
     utterance was clean)."""
 
     errors: list[ErrorReport] = Field(default_factory=list)
+
+
+def _looks_truncated(raw: str | None) -> bool:
+    """Cheap signature for "the model ran out of budget mid-JSON" (#59) vs. other
+    malformed-output causes (wrong field types, hallucinated extra prose that still
+    closes its braces, etc.): more `{` than `}` means some object was opened and
+    never closed. Not a full parser - just enough to make truncation diagnosable
+    from the log line without pulling a Langfuse trace by hand."""
+    text = raw or ""
+    return text.count("{") > text.count("}")
 
 
 def _extract_output(raw: str) -> CorrectorOutput | None:
@@ -156,21 +176,37 @@ class Corrector:
         messages = self._messages(utterance, context)
 
         raw = await self._provider.complete(
-            messages, temperature=self._temperature, max_tokens=self._max_tokens
+            messages,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            reasoning_effort=REASONING_EFFORT,
         )
         output = _extract_output(raw)
         if output is None:
             # Retry deterministically: the same instructions, no sampling wiggle.
             raw = await self._provider.complete(
-                messages, temperature=0.0, max_tokens=self._max_tokens
+                messages,
+                temperature=0.0,
+                max_tokens=self._max_tokens,
+                reasoning_effort=REASONING_EFFORT,
             )
             output = _extract_output(raw)
 
         if output is None:
-            logger.warning(
-                "Corrector output failed validation twice, dropping. First 200 chars: %r",
-                (raw or "")[:200],
-            )
+            if _looks_truncated(raw):
+                logger.warning(
+                    "Corrector output likely truncated at %d chars (max_tokens=%d), "
+                    "dropping: %r",
+                    len(raw or ""),
+                    self._max_tokens,
+                    (raw or "")[:200],
+                )
+            else:
+                logger.warning(
+                    "Corrector output failed validation twice, dropping. "
+                    "First 200 chars: %r",
+                    (raw or "")[:200],
+                )
             return []
         return output.errors
 
