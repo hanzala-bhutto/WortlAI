@@ -37,6 +37,7 @@ import re
 from typing import Protocol
 from uuid import uuid4
 
+from app.agents.corrector import CorrectorCollector
 from app.agents.scenarios import get_scenario
 from app.config import Settings, get_settings
 from app.llmops.tracing import Tracing
@@ -83,6 +84,7 @@ async def run_voice_session(
     synthesizer: Synthesizer,
     settings: Settings | None = None,
     tracing: Tracing | None = None,
+    collector: CorrectorCollector | None = None,
 ) -> None:
     """Drive one voice session to completion (client disconnect or an `end`)."""
     settings = settings or get_settings()
@@ -96,6 +98,8 @@ async def run_voice_session(
     while True:
         message = await ws.receive()
         if message.get("type") == "websocket.disconnect":
+            if collector is not None and thread_id is not None:
+                await _discard_abandoned_session(collector, graph, thread_id)
             return
 
         text = message.get("text")
@@ -216,6 +220,24 @@ async def run_voice_session(
                     rate,
                     tracing,
                 )
+
+
+async def _discard_abandoned_session(
+    collector: CorrectorCollector, graph: object, thread_id: str
+) -> None:
+    """A client dropped the socket without sending `end` (#48): no `debrief` node
+    will ever run for this thread, so tell the collector to stop tracking its
+    tasks rather than leaving them in `_tasks` until process exit. Best-effort -
+    a checkpoint lookup that fails (e.g. mid-shutdown) just skips the discard
+    (guardrail #4: cleanup must never crash the disconnect path)."""
+    try:
+        snapshot = await graph.aget_state(_cfg(thread_id))
+    except Exception:
+        logger.exception("could not look up session state to discard on disconnect")
+        return
+    session_id = (snapshot.values or {}).get("session_id")
+    if session_id is not None:
+        collector.discard(session_id)
 
 
 def _cfg(thread_id: str) -> dict:

@@ -222,7 +222,9 @@ class CorrectorCollector:
 
     Keyed by session_id, so one collector serves every concurrent session. A session
     that ends normally always debriefs, which drains and forgets its tasks; a client
-    that drops without an `end` leaves its tasks to finish and be garbage-collected.
+    that drops without an `end` never reaches debrief, so the voice loop calls
+    `discard` on disconnect (#48) to pop the entry instead of leaving it to grow
+    `_tasks` unbounded.
     """
 
     def __init__(
@@ -266,3 +268,27 @@ class CorrectorCollector:
                 if meets_threshold(report.severity, self._threshold)
             )
         return rows
+
+    def discard(self, session_id: int) -> None:
+        """Drop tracking for a session abandoned without an `end` (#48): no debrief
+        will ever collect these, so pop the entry now rather than leaving it in
+        `_tasks` until process exit. Does not await or cancel the tasks - they keep
+        running (there is no faster way to stop an in-flight Groq call) but nothing
+        will read their result. A done_callback retrieves each task's exception, if
+        any, and logs it; without this, an already-failed or later-failing task with
+        no reader logs "Task exception was never retrieved" at garbage collection."""
+        tasks = self._tasks.pop(session_id, [])
+        for task in tasks:
+            task.add_done_callback(self._log_abandoned_failure)
+
+    @staticmethod
+    def _log_abandoned_failure(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "A Corrector task failed for an abandoned session (no debrief "
+                "to report it to).",
+                exc_info=exc,
+            )

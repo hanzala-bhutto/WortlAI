@@ -671,6 +671,67 @@ async def test_set_rate_with_a_bad_value_is_ignored_not_a_protocol_error(tmp_pat
         await conn.close()
 
 
+async def test_disconnect_without_end_discards_the_collectors_tasks(tmp_path):
+    """#48: a client that drops the socket without `end` never reaches debrief, so
+    nothing ever calls collector.collect() for it. The loop must discard the
+    session's tasks itself on the disconnect branch instead of leaking them."""
+    engine = make_engine(f"sqlite:///{tmp_path / 'w.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    collector = CorrectorCollector(_NoErrorCorrector())
+    deps = SessionGraphDeps(
+        tutor=FakeTutor(["Bitte schön."]),
+        collector=collector,
+        persister=SessionWriter(session_factory=factory),
+    )
+    conn = await aiosqlite.connect(str(tmp_path / "ck.db"))
+    saver = AsyncSqliteSaver(conn)
+    await saver.setup()
+    graph = build_session_graph(deps).compile(checkpointer=saver)
+    try:
+        ws = FakeWS(
+            [
+                up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t11"}),
+                up_bytes(b"opus-1"),
+                # No `end` - the inbox runs out and FakeWS reports a disconnect.
+            ]
+        )
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["Einen Kaffee bitte"]),
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+            collector=collector,
+        )
+
+        snapshot = await graph.aget_state(_cfg("t11"))
+        session_id = snapshot.values["session_id"]
+        assert session_id not in collector._tasks
+    finally:
+        await conn.close()
+
+
+async def test_disconnect_before_start_does_not_touch_the_collector(tmp_path):
+    """No thread_id was ever established, so there is nothing to look up or
+    discard - the disconnect branch must not crash on the missing state."""
+    graph, conn, _ = await build_graph(tmp_path, replies=[])
+    try:
+        collector = CorrectorCollector(_NoErrorCorrector())
+        ws = FakeWS([])  # first receive() is already a disconnect
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+            collector=collector,
+        )
+        assert ws.sent == []
+    finally:
+        await conn.close()
+
+
 async def test_reconnect_on_same_thread_resumes_without_replaying_setup(tmp_path):
     graph, conn, _ = await build_graph(
         tmp_path, replies=["Erste Antwort.", "Zweite Antwort."]

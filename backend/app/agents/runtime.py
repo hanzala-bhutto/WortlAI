@@ -33,6 +33,8 @@ from app.llmops.tracing import Tracing, build_tracing
 class SessionRuntime:
     graph: object  # a compiled LangGraph; typed loosely to avoid a hard import here
     tracing: Tracing  # shared with the provider's tracing; used to scope traces per session (#51)
+    collector: CorrectorCollector  # same instance the graph nodes submit to; the voice
+    # loop calls collector.discard() on a disconnect without `end` (#48)
     _provider: LLMProvider
     _conn: aiosqlite.Connection
 
@@ -53,6 +55,16 @@ async def build_session_runtime(settings: Settings | None = None) -> SessionRunt
     tracing = build_tracing()
     provider = LLMProvider(settings=settings, tracing=tracing)
     prompt_store = build_prompt_store()
+    collector = CorrectorCollector(
+        Corrector(
+            provider=provider,
+            prompt_store=prompt_store,
+            prompt_label=settings.corrector_prompt_label,
+            temperature=settings.corrector_temperature,
+            max_tokens=settings.corrector_max_tokens,
+        ),
+        severity_threshold=settings.corrector_severity_threshold,
+    )
     deps = SessionGraphDeps(
         tutor=Tutor(
             provider=provider,
@@ -61,18 +73,15 @@ async def build_session_runtime(settings: Settings | None = None) -> SessionRunt
             temperature=settings.tutor_temperature,
             max_tokens=settings.tutor_max_tokens,
         ),
-        collector=CorrectorCollector(
-            Corrector(
-                provider=provider,
-                prompt_store=prompt_store,
-                prompt_label=settings.corrector_prompt_label,
-                temperature=settings.corrector_temperature,
-                max_tokens=settings.corrector_max_tokens,
-            ),
-            severity_threshold=settings.corrector_severity_threshold,
-        ),
+        collector=collector,
         persister=SessionWriter(),
     )
     saver, conn = await open_checkpointer(checkpoints_path(settings))
     graph = build_session_graph(deps).compile(checkpointer=saver)
-    return SessionRuntime(graph=graph, tracing=tracing, _provider=provider, _conn=conn)
+    return SessionRuntime(
+        graph=graph,
+        tracing=tracing,
+        collector=collector,
+        _provider=provider,
+        _conn=conn,
+    )
