@@ -20,7 +20,7 @@ import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sqlalchemy.orm import sessionmaker
 
-from app.agents.corrector import CorrectorCollector
+from app.agents.corrector import CorrectorCollector, ErrorReport
 from app.agents.graph import SessionGraphDeps, build_session_graph
 from app.agents.persistence import SessionWriter
 from app.agents.scenarios import get_scenario
@@ -93,13 +93,29 @@ class _NoErrorCorrector:
         return []
 
 
-async def build_graph(tmp_path, replies):
+class _OneErrorCorrector:
+    """A Corrector that always finds one critical error, for tests proving a close
+    path actually reaches debrief and persists what the Corrector collected."""
+
+    async def analyze(self, *, utterance, context=None):
+        return [
+            ErrorReport(
+                error_type="grammar.case.dative",
+                severity="critical",
+                utterance=utterance,
+                correction="mit dem Hund",
+                explanation="Nach mit steht der Dativ.",
+            )
+        ]
+
+
+async def build_graph(tmp_path, replies, *, collector=None):
     engine = make_engine(f"sqlite:///{tmp_path / 'w.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     deps = SessionGraphDeps(
         tutor=FakeTutor(replies),
-        collector=CorrectorCollector(_NoErrorCorrector()),
+        collector=collector or CorrectorCollector(_NoErrorCorrector()),
         persister=SessionWriter(session_factory=factory),
     )
     conn = await aiosqlite.connect(str(tmp_path / "ck.db"))
@@ -459,7 +475,9 @@ async def test_silence_prompts_the_user_again(tmp_path):
 
 
 async def test_turn_cap_closes_the_session(tmp_path):
-    graph, conn, _ = await build_graph(tmp_path, replies=["r"])
+    graph, conn, factory = await build_graph(
+        tmp_path, replies=["r"], collector=CorrectorCollector(_OneErrorCorrector())
+    )
     try:
         ws = FakeWS(
             [
@@ -467,17 +485,28 @@ async def test_turn_cap_closes_the_session(tmp_path):
                     {"type": "start", "scenario_id": "baeckerei", "thread_id": "t4"}
                 ),
                 up_bytes(b"a"),
+                up_bytes(b"b"),
             ]
         )
         await run_voice_session(
             ws,
             graph=graph,
-            transcriber=FakeTranscriber(["hallo"]),
+            transcriber=FakeTranscriber(["hallo", "hallo"]),
             synthesizer=FakeSynth(),
-            settings=_settings(voice_max_turns=0),
+            settings=_settings(voice_max_turns=1),
         )
         assert any(m["type"] == "error" and m["stage"] == "limit" for m in ws.sent)
         assert _types(ws)[-1] == "session_closed"
+        # Same close sequence as `end` (#53): debrief actually ran, so the client
+        # can fetch this session and it shows up closed with its errors persisted.
+        assert isinstance(ws.sent[-1]["session_id"], int)
+
+        with factory() as db:
+            rows = db.query(Session).all()
+            assert len(rows) == 1
+            assert rows[0].ended_at is not None
+            assert len(rows[0].errors) == 1
+            assert rows[0].errors[0].error_type == "grammar.case.dative"
     finally:
         await conn.close()
 

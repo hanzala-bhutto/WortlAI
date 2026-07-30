@@ -160,12 +160,9 @@ async def run_voice_session(
             elif kind == "end":
                 session_id = None
                 if thread_id is not None:
-                    with tracing.session(
-                        session_id=thread_id, user_id=settings.langfuse_user_id
-                    ):
-                        await graph.ainvoke({"end_requested": True}, _cfg(thread_id))
-                        snapshot = await graph.aget_state(_cfg(thread_id))
-                    session_id = (snapshot.values or {}).get("session_id")
+                    session_id = await _close_session(
+                        graph, thread_id, tracing, settings
+                    )
                 await ws.send_json({"type": "session_closed", "session_id": session_id})
                 return
 
@@ -186,7 +183,8 @@ async def run_voice_session(
                         "message": "session turn limit reached",
                     }
                 )
-                await ws.send_json({"type": "session_closed"})
+                session_id = await _close_session(graph, thread_id, tracing, settings)
+                await ws.send_json({"type": "session_closed", "session_id": session_id})
                 return
 
             try:
@@ -220,6 +218,21 @@ async def run_voice_session(
                     rate,
                     tracing,
                 )
+
+
+async def _close_session(
+    graph: object,
+    thread_id: str,
+    tracing: Tracing,
+    settings: Settings,
+) -> int | None:
+    """Run the graph's debrief node (`ended_at`, collected `ErrorLog` rows) for
+    `thread_id` and return its `session_id`. Shared by the `end` message and the
+    turn-cap close (#53) so both paths close the session the same way."""
+    with tracing.session(session_id=thread_id, user_id=settings.langfuse_user_id):
+        await graph.ainvoke({"end_requested": True}, _cfg(thread_id))
+        snapshot = await graph.aget_state(_cfg(thread_id))
+    return (snapshot.values or {}).get("session_id")
 
 
 async def _discard_abandoned_session(
