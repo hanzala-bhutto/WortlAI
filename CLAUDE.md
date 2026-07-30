@@ -94,7 +94,8 @@ Keep each one concrete enough to test.
 ## Phase status
 
 - Phase 0 (foundation): done 2026-07-25.
-- Phase 1 (voice loop): issues #1-#7 merged. #8 (Talk UI) in progress: PR #50 (core loop)
-  open on `feat/8-talk-core`; a second PR (speed slider, "Wie bitte?", tap-to-gloss,
-  debrief sheet, scenario picker) will carry `Closes #8`.
-- Phases 2-4: not started.
+- Phase 1 (voice loop): done 2026-07-30. Milestone closed, all issues merged
+  (#1-#8, #45, #47, #51-#53, #55, #58-#60).
+- Phase 2 (RAG + Learner Model + FSRS): not started. Next up: #9 (deterministic
+  glossary parser), which #10-#20 build on.
+- Phases 3-4: not started.
