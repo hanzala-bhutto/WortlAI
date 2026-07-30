@@ -30,6 +30,47 @@ React SPA (Vite) and a FastAPI backend, served from one origin in production. La
 
 Decisions and their evidence live in [`CLAUDE.md`](CLAUDE.md) and [`docs/PLAN.md`](docs/PLAN.md).
 
+### Session orchestration
+
+Each conversation runs as a LangGraph state graph, checkpointed to SQLite so a session can pause and resume, driving four agents. The Curriculum agent picks the scenario from due FSRS items and recent error patterns; the Tutor agent holds the German conversation at the target CEFR level; the Corrector runs async alongside it so it never interrupts, logging errors for the debrief; the Assessment agent runs outside this per-session loop, re-estimating CEFR level every ~10 sessions and feeding that back into the Curriculum agent's next pick.
+
+```mermaid
+flowchart LR
+    Curriculum["Curriculum agent\n(scenario pick from FSRS due items\n+ error patterns)"] --> Setup
+
+    subgraph Session["LangGraph session (SQLite-checkpointed, pause/resume)"]
+        Setup[scenario-setup] --> Converse["Tutor agent\n(converse)"]
+        Converse <--> Correct["Corrector agent\n(async-correct)"]
+        Converse --> Debrief[debrief]
+        Correct --> Debrief
+    end
+
+    Debrief --> FSRS["FSRS state + error log\n(SQLite)"]
+    FSRS -.every ~10 sessions.-> Assessment["Assessment agent\n(CEFR re-estimate)"]
+    Assessment -.-> Curriculum
+```
+
+## Technologies
+
+| Technology | Role | Used for |
+|---|---|---|
+| React 19 + Vite | Frontend SPA | Talk / Review / Dashboard pages, served as static build by FastAPI in prod |
+| TanStack Query / Router | Frontend state | Server data fetching/caching, routing |
+| Tailwind + shadcn/ui | Frontend UI | Styling and components (added as issues need them) |
+| FastAPI | Backend | REST `/api/v1`, one voice WebSocket, SSE for ingest progress |
+| LangGraph | Session orchestration | Checkpointed state graph: setup -> converse <-> correct -> debrief |
+| Groq (`gpt-oss-120b` / `llama-3.3-70b`) | Primary LLM | Tutor replies, Corrector error analysis, Curriculum briefs |
+| NVIDIA NIM | LLM fallback | Backup when Groq free tier is rate-limited or down |
+| Groq Whisper (`whisper-large-v3`) | STT | Transcribing spoken turns in the voice loop |
+| edge-tts (Qwen3-TTS fallback) | TTS | German neural voices speaking Tutor replies |
+| LlamaIndex | Ingestion | Parsing/chunking textbook PDFs into vectors + graph edges |
+| Qdrant | Vector store | Semantic search over ingested textbook content |
+| SQLite (typed-edge tables) | Lexical graph | Word/chunk relationships (1-2 hop queries, no Neo4j needed) |
+| py-fsrs | Spaced repetition | Scheduling chunk/Redemittel reviews from conversation-derived grades |
+| SQLAlchemy + SQLite | Learner DB | Sessions, error log, FSRS state, immersion hours |
+| spaCy (`de_core_news_sm`) | NLP | Lemmatizing transcripts so FSRS states update from free speech |
+| Langfuse (self-hosted) | LLMOps | Traces, versioned prompts (`production`/`staging`), gold datasets, evals |
+
 ## Setup
 
 Needs Python 3.12, Node 20+, Docker Desktop, and free keys from [Groq](https://console.groq.com) and [NVIDIA NIM](https://build.nvidia.com).
@@ -66,7 +107,7 @@ Drop your own German course PDFs into `Deustch_Books/` (gitignored, copyrighted 
 ## Roadmap
 
 - **Phase 0** Foundation: docs, skills, workflow. Done.
-- **Phase 1** Voice conversation loop. In progress.
+- **Phase 1** Voice conversation loop. Done.
 - **Phase 2** Memory: RAG ingestion, learner model, chunk-based FSRS.
 - **Phase 3** Listening, shadowing, assessment, full LLMOps.
 - **Phase 4** Multi-voice roleplay, real media, MCP server.
