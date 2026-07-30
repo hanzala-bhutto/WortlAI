@@ -130,3 +130,41 @@ async def test_collect_isolates_sessions(tmp_path):
     assert len(rows2) == 1
     # A session with nothing submitted collects cleanly.
     assert await collector.collect(99) == []
+
+
+async def test_discard_drops_the_session_so_a_later_collect_sees_nothing(tmp_path):
+    """#48: a client that disconnects without `end` never reaches debrief, so the
+    voice loop discards instead of collecting. Pinning that discard pops the entry
+    just like collect does, so `_tasks` doesn't grow unbounded across abandoned
+    sessions."""
+    corrector = FakeCorrector([[report("critical")]])
+    collector = CorrectorCollector(corrector)
+
+    collector.submit(1, utterance="a")
+    collector.discard(1)
+
+    assert 1 not in collector._tasks
+    # A later, unrelated collect for the same id sees nothing left to gather.
+    assert await collector.collect(1) == []
+
+
+async def test_discard_on_an_unknown_session_is_a_no_op(tmp_path):
+    collector = CorrectorCollector(FakeCorrector([]))
+    collector.discard(999)  # must not raise
+
+
+async def test_discard_swallows_a_failed_tasks_exception(tmp_path, caplog):
+    """Without discard consuming the exception, a failed task with no reader would
+    log "Task exception was never retrieved" at garbage collection instead of the
+    clear message discard's callback produces."""
+    collector = CorrectorCollector(BoomCorrector())
+
+    collector.submit(1, utterance="Ich gehe mit der Hund.")
+    collector.discard(1)
+    # Two yields: one lets the submitted task itself run (and raise), the second
+    # lets asyncio's own call_soon-scheduled done_callback dispatch fire after
+    # that - a single yield only covers the first.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert "abandoned session" in caplog.text
