@@ -246,11 +246,14 @@ async def test_second_turn_biases_with_the_tutors_previous_reply(tmp_path):
 
 
 class RecordingTracing:
-    """Stands in for Tracing (#51): records every session_id/user_id the loop
-    scopes a turn with, instead of touching real Langfuse/OTEL machinery."""
+    """Stands in for Tracing (#51/#55): records every session_id/user_id the loop
+    scopes a turn with, and every flush, instead of touching real Langfuse/OTEL
+    machinery."""
 
-    def __init__(self):
+    def __init__(self, *, enabled=True):
         self.calls = []
+        self.flush_count = 0
+        self.enabled = enabled
 
     def session(self, *, session_id, user_id=None):
         from contextlib import contextmanager
@@ -261,6 +264,9 @@ class RecordingTracing:
             yield
 
         return _cm()
+
+    def flush(self):
+        self.flush_count += 1
 
 
 async def test_every_turn_is_scoped_to_the_thread_id_for_tracing(tmp_path):
@@ -290,6 +296,65 @@ async def test_every_turn_is_scoped_to_the_thread_id_for_tracing(tmp_path):
             ("t1", "hanzala"),
             ("t1", "hanzala"),
         ]
+    finally:
+        await conn.close()
+
+
+async def test_each_turn_flushes_traces_without_waiting_for_process_exit(tmp_path):
+    """#55: a live session must not rely on the process exiting for spans to
+    reach Langfuse - each turn (setup + every user turn) flushes on its own."""
+    import asyncio
+
+    from app.voice import session as session_module
+
+    graph, conn, _ = await build_graph(tmp_path, replies=["Guten Tag!", "Bitte schön."])
+    try:
+        ws = FakeWS(
+            [
+                up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t9"}),
+                up_bytes(b"opus-1"),
+                up_text({"type": "end"}),
+            ]
+        )
+        tracing = RecordingTracing()
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber(["Einen Kaffee bitte"]),
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+            tracing=tracing,
+        )
+        # Flushes are scheduled fire-and-forget on a worker thread; wait for the
+        # ones this session queued so the assertion isn't a timing race.
+        if session_module._pending_flushes:
+            await asyncio.gather(*list(session_module._pending_flushes))
+
+        # One flush per _drive_turn call: the opening line and the user's turn.
+        # `end` doesn't drive a turn, so it schedules no extra flush.
+        assert tracing.flush_count == 2
+    finally:
+        await conn.close()
+
+
+async def test_disabled_tracing_schedules_no_flush(tmp_path):
+    """When Langfuse isn't configured, flushing must stay a true no-op - no
+    thread spun up for a client that doesn't exist."""
+    graph, conn, _ = await build_graph(tmp_path, replies=["Guten Tag!"])
+    try:
+        ws = FakeWS(
+            [up_text({"type": "start", "scenario_id": "cafe", "thread_id": "t10"})]
+        )
+        tracing = RecordingTracing(enabled=False)
+        await run_voice_session(
+            ws,
+            graph=graph,
+            transcriber=FakeTranscriber([]),
+            synthesizer=FakeSynth(),
+            settings=_settings(),
+            tracing=tracing,
+        )
+        assert tracing.flush_count == 0
     finally:
         await conn.close()
 
