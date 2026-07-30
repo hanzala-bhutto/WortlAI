@@ -150,6 +150,7 @@ class LLMProvider:
         max_tokens: int | None,
         *,
         stream: bool,
+        reasoning_effort: str | None = None,
     ) -> dict:
         payload: dict = {
             "model": target.model,
@@ -159,6 +160,12 @@ class LLMProvider:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if reasoning_effort is not None:
+            # Only meaningful to reasoning models (gpt-oss-*); other targets in the
+            # chain ignore unknown fields. Caller opts in per-call (#59) - hidden
+            # chain-of-thought is billed against the same max_tokens budget, so a
+            # caller that wants a short, mechanical reply can ask for less of it.
+            payload["reasoning_effort"] = reasoning_effort
         if stream:
             # Ask Groq's OpenAI-compatible endpoint for a final usage-only chunk;
             # without this, streamed responses never report token counts (#58).
@@ -181,6 +188,7 @@ class LLMProvider:
         *,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         """Full, non-streamed reply from the first model in the chain that answers."""
         last_error: Exception | None = None
@@ -190,7 +198,7 @@ class LLMProvider:
             for target in self._chain():
                 try:
                     reply, usage = await self._complete_one(
-                        target, messages, temperature, max_tokens
+                        target, messages, temperature, max_tokens, reasoning_effort
                     )
                 except _ModelFailed as exc:
                     logger.warning(
@@ -211,9 +219,17 @@ class LLMProvider:
         messages: list[dict[str, str]],
         temperature: float,
         max_tokens: int | None,
+        reasoning_effort: str | None = None,
     ) -> tuple[str, dict | None]:
         url = f"{target.base_url}/chat/completions"
-        payload = self._payload(target, messages, temperature, max_tokens, stream=False)
+        payload = self._payload(
+            target,
+            messages,
+            temperature,
+            max_tokens,
+            stream=False,
+            reasoning_effort=reasoning_effort,
+        )
         client = self._get_client()
 
         for attempt in range(MAX_RETRIES + 1):

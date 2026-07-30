@@ -115,6 +115,7 @@ class ChatCompleter(Protocol):
         *,
         temperature: float = ...,
         max_tokens: int | None = ...,
+        reasoning_effort: str | None = ...,
     ) -> str: ...
 
 
