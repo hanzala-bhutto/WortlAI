@@ -19,6 +19,8 @@ REQUIRED_ENV = {
     "NIM_VISION_MODEL": "nvidia/nemotron-parse",
     "STT_MODEL": "whisper-large-v3",
     "TTS_VOICE": "de-DE-KatjaNeural",
+    "EMBEDDER_MODEL_LOCAL": "intfloat/multilingual-e5-large",
+    "EMBEDDER_MODEL_NIM": "nvidia/nv-embedqa-e5-v5",
     "CORS_ORIGINS": '["http://localhost:3001"]',
 }
 
@@ -95,3 +97,5 @@ def test_no_urls_or_model_ids_are_hardcoded_in_source():
     assert "gpt-oss" not in source
     assert "whisper" not in source
     assert "Neural" not in source
+    assert "multilingual-e5-large" not in source
+    assert "embedqa" not in source
