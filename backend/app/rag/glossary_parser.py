@@ -20,7 +20,6 @@ from typing import Literal
 import pdfplumber
 from pydantic import BaseModel
 
-_ARTICLES = {"der", "die", "das"}
 _ENGLISH_COLUMN_X0 = 250  # words right of this are the English half of the row
 _ROW_TOLERANCE = 3  # points; pdfplumber's 'top' jitters a couple points between columns
 # Wider than pdfplumber's default (3pt): the font's dropped-vowel gap (see module
@@ -42,6 +41,12 @@ _ARTICLE_NOUN_RE = re.compile(
     r"^(der|die|das)\s+([A-ZÄÖÜ][\wäöüß.\-]*)"
     r'(?:,\s*("?-\S*|\(Pl\.\)|\(Sg\.[^)]*\)))?\s*(.*)$'
 )
+# Known gap: separable-prefix verbs restate the prefix in the third-person
+# clause too ("mit|sprechen, er spricht mit, hat mitgesprochen"), so
+# third_person_present here only captures "spricht", not the trailing "mit".
+# These entries still match (falling into pos="verb") but the captured
+# third-person form is incomplete; full recovery is out of scope for #9's
+# deterministic pass and would need a second, verb-specific regex pass.
 _VERB_RE = re.compile(
     r"^([\wäöüß]+)(?:\|([\wäöüß]+))?,\s*(?:er|es)\s+([\wäöüß]+)"
     r"(?:,\s*(hat|ist)\s+([\wäöüß]+))?\s*(.*)$"
