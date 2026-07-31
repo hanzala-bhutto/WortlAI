@@ -16,6 +16,7 @@ REQUIRED_ENV = {
     "LLM_MODEL_PRIMARY": "openai/gpt-oss-120b",
     "LLM_MODEL_SECONDARY": "llama-3.3-70b-versatile",
     "LLM_MODEL_FALLBACK": "meta/llama-3.3-70b-instruct",
+    "NIM_VISION_MODEL": "nvidia/nemotron-parse",
     "STT_MODEL": "whisper-large-v3",
     "TTS_VOICE": "de-DE-KatjaNeural",
     "CORS_ORIGINS": '["http://localhost:3001"]',

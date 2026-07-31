@@ -7,18 +7,20 @@ production are the fallback chain (429/5xx walks primary -> secondary -> NIM) an
 that retries happen before a fallback, not instead of it.
 """
 
+import base64
 import json
 from types import SimpleNamespace
 
 import httpx2
 import pytest
 
-from app.llm.provider import LLMProvider, ProviderError
+from app.llm.provider import MAX_RETRIES, LLMProvider, ProviderError
 from app.llmops.tracing import Tracing
 
 PRIMARY = "openai/gpt-oss-120b"
 SECONDARY = "llama-3.3-70b-versatile"
 FALLBACK = "meta/llama-3.3-70b-instruct"
+VISION_MODEL = "nvidia/nemotron-parse"
 
 
 def make_settings(*, groq_key="gk", nim_key="nk"):
@@ -32,6 +34,7 @@ def make_settings(*, groq_key="gk", nim_key="nk"):
         llm_model_primary=PRIMARY,
         llm_model_secondary=SECONDARY,
         llm_model_fallback=FALLBACK,
+        nim_vision_model=VISION_MODEL,
     )
 
 
@@ -387,3 +390,158 @@ async def test_complete_omits_reasoning_effort_by_default():
     await provider.complete(MESSAGES)
 
     assert "reasoning_effort" not in captured_payload
+
+
+def markdown_bbox_response(blocks: list[dict]) -> httpx2.Response:
+    """A nemotron-parse tool-call reply. The real API wraps the block list in an
+    extra outer array (`[[{...}, {...}]]`) - spike-verified (#10), not assumed."""
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "markdown_bbox",
+                                "arguments": json.dumps([blocks]),
+                            },
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    return httpx2.Response(200, json=body)
+
+
+IMAGE_BYTES = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+
+class TestParseDocumentImage:
+    """nemotron-parse (#10) is a single link, not a fallback chain: Groq has no
+    usable free-tier vision model (docs/feasibility/010-vision-extraction.md),
+    so NIM is the only target and its request shape (tools + image-only content,
+    no text part) differs from the text chain's plain-string messages."""
+
+    async def test_sends_the_tools_based_image_only_payload(self):
+        captured_payload = {}
+        captured_headers = {}
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            captured_payload.update(json.loads(request.content))
+            captured_headers.update(request.headers)
+            return markdown_bbox_response(
+                [
+                    {
+                        "bbox": {"xmin": 0.1, "ymin": 0.1, "xmax": 0.5, "ymax": 0.2},
+                        "text": "Hallo",
+                        "type": "Text",
+                    }
+                ]
+            )
+
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        provider = LLMProvider(settings=make_settings(), client=client)
+
+        blocks = await provider.parse_document_image(IMAGE_BYTES)
+
+        assert captured_payload["model"] == VISION_MODEL
+        assert captured_payload["tools"] == [
+            {"type": "function", "function": {"name": "markdown_bbox"}}
+        ]
+        content = captured_payload["messages"][0]["content"]
+        assert content == [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{base64.b64encode(IMAGE_BYTES).decode()}"
+                },
+            }
+        ]
+        assert captured_headers["authorization"] == "Bearer nk"
+        assert blocks == [
+            {
+                "bbox": {"xmin": 0.1, "ymin": 0.1, "xmax": 0.5, "ymax": 0.2},
+                "text": "Hallo",
+                "type": "Text",
+            }
+        ]
+
+    async def test_no_nim_key_raises_provider_error_without_a_call(self):
+        provider = LLMProvider(
+            settings=make_settings(nim_key=""),
+            client=httpx2.AsyncClient(
+                transport=httpx2.MockTransport(
+                    lambda r: (_ for _ in ()).throw(AssertionError("should not call"))
+                )
+            ),
+        )
+
+        with pytest.raises(ProviderError):
+            await provider.parse_document_image(IMAGE_BYTES)
+
+    async def test_429_is_retried_then_succeeds(self):
+        responses = [
+            httpx2.Response(429),
+            markdown_bbox_response([{"bbox": {}, "text": "ok", "type": "Text"}]),
+        ]
+
+        def handler(_request: httpx2.Request) -> httpx2.Response:
+            return responses.pop(0) if len(responses) > 1 else responses[0]
+
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        provider = LLMProvider(settings=make_settings(), client=client)
+
+        blocks = await provider.parse_document_image(IMAGE_BYTES)
+
+        assert blocks[0]["text"] == "ok"
+
+    async def test_retries_exhausted_raises_provider_error(self):
+        client = httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda r: httpx2.Response(500))
+        )
+        provider = LLMProvider(settings=make_settings(), client=client)
+
+        with pytest.raises(ProviderError):
+            await provider.parse_document_image(IMAGE_BYTES)
+
+    async def test_malformed_tool_call_body_is_retried_once_then_raises(self):
+        """A 200 with no tool_calls (model answered in plain content instead, or
+        the schema shifted) must not raise past the caller as a raw KeyError -
+        vision extraction is an offline ingestion job, guardrail 1 still applies:
+        retry once (there's no fallback model for vision to hand off to), then
+        raise so the caller can flag the page for review."""
+        calls = 0
+
+        def handler(_request: httpx2.Request) -> httpx2.Response:
+            nonlocal calls
+            calls += 1
+            return httpx2.Response(
+                200, json={"choices": [{"message": {"content": "oops"}}]}
+            )
+
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        provider = LLMProvider(settings=make_settings(), client=client)
+
+        with pytest.raises(ProviderError):
+            await provider.parse_document_image(IMAGE_BYTES)
+
+        assert calls == MAX_RETRIES + 1
+
+    async def test_malformed_tool_call_body_recovers_on_retry(self):
+        responses = [
+            httpx2.Response(200, json={"choices": [{"message": {"content": "oops"}}]}),
+            markdown_bbox_response([{"bbox": {}, "text": "recovered", "type": "Text"}]),
+        ]
+
+        def handler(_request: httpx2.Request) -> httpx2.Response:
+            return responses.pop(0) if len(responses) > 1 else responses[0]
+
+        client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        provider = LLMProvider(settings=make_settings(), client=client)
+
+        blocks = await provider.parse_document_image(IMAGE_BYTES)
+
+        assert blocks[0]["text"] == "recovered"

@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     llm_model_primary: str
     llm_model_secondary: str
     llm_model_fallback: str
+    # Vision-capable NIM model for document extraction (#10). Not part of the
+    # text fallback chain above: Groq has no usable free-tier vision model
+    # (docs/feasibility/010-vision-extraction.md), so this is a single link,
+    # not a chain.
+    nim_vision_model: str
     stt_model: str
     tts_voice: str
 

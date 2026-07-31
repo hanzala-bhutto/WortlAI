@@ -18,6 +18,7 @@ Behaviour that the rest of the app relies on:
 """
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -256,6 +257,80 @@ class LLMProvider:
         # Unreachable: the loop either returns or raises on its final attempt.
         raise _ModelFailed("retries exhausted")
 
+    async def parse_document_image(self, image_bytes: bytes) -> list[dict]:
+        """OCR + layout for one rasterized page image, via NIM's nemotron-parse
+        (#10). A single target, not the Groq/NIM fallback chain above: Groq has
+        no usable free-tier vision model (docs/feasibility/010-vision-extraction.md),
+        and the request shape differs from the text chain's plain-string
+        messages - image-only content, a `tools`-based call to the `markdown_bbox`
+        function, no system message. Returns the raw block list
+        (`{bbox, text, type}` per block, spike-verified #10); callers validate
+        and structure it, per guardrail 1.
+        """
+        if not self._settings.nim_api_key:
+            raise ProviderError("NIM is not configured: set NIM_API_KEY.")
+        target = _Target(
+            "nim",
+            self._settings.nim_base_url,
+            self._settings.nim_api_key,
+            self._settings.nim_vision_model,
+        )
+        image_b64 = base64.b64encode(image_bytes).decode()
+        payload = {
+            "model": target.model,
+            "tools": [{"type": "function", "function": {"name": "markdown_bbox"}}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                        }
+                    ],
+                }
+            ],
+            "temperature": 0.0,
+        }
+        url = f"{target.base_url}/chat/completions"
+        client = self._get_client()
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await client.post(
+                    url, json=payload, headers=self._headers(target)
+                )
+                response.raise_for_status()
+            except httpx2.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code in RETRYABLE_STATUS
+                    and attempt < MAX_RETRIES
+                ):
+                    await self._backoff(attempt, exc.response)
+                    continue
+                raise ProviderError(
+                    f"nemotron-parse failed: HTTP {exc.response.status_code}"
+                ) from exc
+            except (httpx2.TimeoutException, httpx2.TransportError) as exc:
+                if attempt < MAX_RETRIES:
+                    await self._backoff(attempt, None)
+                    continue
+                raise ProviderError(f"nemotron-parse failed: {exc}") from exc
+
+            try:
+                return _extract_markdown_bbox_blocks(response)
+            except ProviderError:
+                # A 200 with no tool_calls or unparsable arguments - guardrail 1:
+                # retry once (there is no fallback model for vision to hand off
+                # to), then let the page be flagged for review by the caller.
+                if attempt < MAX_RETRIES:
+                    await self._backoff(attempt, None)
+                    continue
+                raise
+
+        # Unreachable: the loop either returns or raises on its final attempt.
+        raise ProviderError("nemotron-parse: retries exhausted")
+
     async def stream(
         self,
         messages: list[dict[str, str]],
@@ -354,6 +429,21 @@ def _extract_content(response: httpx2.Response) -> str:
     if not content:
         raise _ModelFailed("empty completion content")
     return content
+
+
+def _extract_markdown_bbox_blocks(response: httpx2.Response) -> list[dict]:
+    """Pull the block list out of a nemotron-parse `markdown_bbox` tool-call
+    reply. The API wraps it in an extra outer array (`arguments` is
+    `"[[{...}, {...}]]"`, spike-verified #10) - `[0]` unwraps to the actual
+    per-page block list. A 200 with a different shape (no tool_calls, bad JSON)
+    is treated as a failure so the caller degrades, never a raw KeyError."""
+    try:
+        tool_calls = response.json()["choices"][0]["message"]["tool_calls"]
+        arguments = tool_calls[0]["function"]["arguments"]
+        blocks = json.loads(arguments)[0]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise ProviderError(f"malformed nemotron-parse response: {exc}") from exc
+    return blocks
 
 
 def _extract_usage(response: httpx2.Response) -> dict | None:
