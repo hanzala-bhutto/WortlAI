@@ -35,6 +35,12 @@ edge-tts==7.2.8
 sqlalchemy==2.0.36
 alembic==1.14.0
 
+# RAG ingestion: deterministic glossary parsing (#9). Chosen over PyMuPDF for
+# char-level position access (page.chars, extract_words x_tolerance) needed to
+# work around the source PDF's font-level dropped-vowel bug - see
+# app/rag/glossary_parser.py's module docstring.
+pdfplumber==0.11.10
+
 # Dev / test
 pytest==9.1.1
 pytest-asyncio==1.4.0
