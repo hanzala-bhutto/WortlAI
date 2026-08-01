@@ -41,6 +41,19 @@ alembic==1.14.0
 # app/rag/glossary_parser.py's module docstring.
 pdfplumber==0.11.10
 
+# RAG embedding + retrieval (#11): embedder.py behind one swappable interface
+# (docs/feasibility/011-embedder-qdrant-collections.md), two Qdrant collections
+# loaded via LlamaIndex. sentence-transformers pulls in torch for local e5-large
+# CPU inference; llama-index-embeddings-huggingface is only used for its
+# query_instruction/text_instruction hook onto that model, not for NIM (a direct
+# httpx2 call instead, since the NVIDIA embeddings package doesn't expose the
+# `truncate` field nv-embedqa-e5-v5 requires).
+llama-index-core==0.14.23
+llama-index-vector-stores-qdrant==0.10.2
+llama-index-embeddings-huggingface==0.7.0
+qdrant-client==1.18.0
+sentence-transformers==5.6.1
+
 # Dev / test
 pytest==9.1.1
 pytest-asyncio==1.4.0

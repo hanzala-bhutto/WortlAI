@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -51,6 +52,12 @@ class Settings(BaseSettings):
     stt_model: str
     tts_voice: str
 
+    # Embedding model ids (#11), one per provider since e5's local checkpoint name
+    # and NIM's hosted model name are never interchangeable. No default, so a typo
+    # fails at boot rather than silently embedding with the wrong model.
+    embedder_model_local: str
+    embedder_model_nim: str
+
     cors_origins: list[str]
 
     data_dir: Path = BACKEND_DIR / "data"
@@ -87,6 +94,16 @@ class Settings(BaseSettings):
     voice_rate_default: float = 1.0
     voice_rate_min: float = 0.7
     voice_rate_max: float = 1.2
+
+    # RAG embedding (#11). "local" runs the local embedding model on CPU via
+    # sentence-transformers, no key needed; "nim" calls NVIDIA NIM's embeddings
+    # endpoint instead. A sane default (local always works), not a URL/model id,
+    # so it gets one like tutor_prompt_label does.
+    embedder_provider: Literal["local", "nim"] = "local"
+    # Qdrant collection names for #11's two-collection split (word records vs.
+    # Redemittel/grammar content). Names, not endpoints, so a default is fine.
+    qdrant_collection_vocab: str = "vocab"
+    qdrant_collection_content: str = "content"
 
     def configured_keys(self) -> dict[str, bool]:
         """Which credentials are present, so a misconfigured .env shows up before
