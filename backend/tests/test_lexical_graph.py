@@ -217,6 +217,24 @@ def test_governs_edge_needs_wellformed_prep_case(db_session):
     assert edge.detail == "auf+Akk"
 
 
+def test_governs_detail_accepts_full_case_name_and_canonicalizes(db_session):
+    # The model often emits the full case ("auf+Akkusativ"); it must be kept and
+    # stored canonically as "auf+Akk", not dropped on a format mismatch.
+    _persist_pair(db_session)
+    cand = {
+        "from_lemma": "freuen",
+        "to_lemma": "Wochenende",
+        "edge_type": "GOVERNS",
+        "citation": "Ich freue mich auf das Wochenende.",
+        "detail": "auf+Akkusativ",
+    }
+
+    assert persist_relational_edges(db_session, [cand], _CORPUS) == 1
+    db_session.commit()
+    edge = db_session.scalar(select(WordLink).where(WordLink.edge_type == "GOVERNS"))
+    assert edge.detail == "auf+Akk"
+
+
 def test_inflected_form_counts_as_the_lemma(db_session):
     # "freue" (inflected) must satisfy the gate for lemma "freuen".
     assert citation_is_valid(

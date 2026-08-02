@@ -45,7 +45,39 @@ _RELATIONAL_TYPES = frozenset({"COLLOCATES_WITH", "GOVERNS", "SYNONYM", "ANTONYM
 # Symmetric edge types get their reverse written too, so a walk finds them from
 # either end and /graph-check's symmetry audit (check 6) holds by construction.
 _SYMMETRIC_TYPES = frozenset({"IN_FAMILY", "SYNONYM", "ANTONYM"})
-_GOVERNS_DETAIL_RE = re.compile(r"^[\wäöüß]+\+(Akk|Dat|Gen|Nom)$")
+
+# A GOVERNS edge's detail is "preposition+Case". We store the case abbreviated
+# (Akk/Dat/Gen/Nom, what /graph-check check 5 expects), but the model often emits
+# the full German name ("mit+Dativ") or an English one, so accept those spellings
+# and canonicalise rather than drop an otherwise valid government edge.
+_GOVERNS_DETAIL_RE = re.compile(r"^([\wäöüß]+)\+(\w+)$")
+_CASE_ALIASES = {
+    "akk": "Akk",
+    "akkusativ": "Akk",
+    "accusative": "Akk",
+    "dat": "Dat",
+    "dativ": "Dat",
+    "dative": "Dat",
+    "gen": "Gen",
+    "genitiv": "Gen",
+    "genitive": "Gen",
+    "nom": "Nom",
+    "nominativ": "Nom",
+    "nominative": "Nom",
+}
+
+
+def _normalize_govern_detail(detail: str | None) -> str | None:
+    """Canonicalise a GOVERNS `detail` to "prep+Abbrev" (e.g. "mit+Dativ" ->
+    "mit+Dat"), or None if it is not a recognisable preposition+case marker."""
+    if not detail:
+        return None
+    match = _GOVERNS_DETAIL_RE.match(detail.strip())
+    if match is None:
+        return None
+    prep, case = match.group(1), match.group(2).casefold()
+    canonical = _CASE_ALIASES.get(case)
+    return f"{prep}+{canonical}" if canonical else None
 
 
 # --- word nodes -----------------------------------------------------------------
@@ -242,11 +274,10 @@ def citation_is_valid(
         return False
     if not any(lemmatizer.matches(t, to_lemma) for t in tokens):
         return False
-    if edge_type == "GOVERNS":
-        detail = (candidate.get("detail") or "").strip()
-        if not _GOVERNS_DETAIL_RE.match(detail):
-            return False
-    return True
+    # A GOVERNS edge additionally needs a recognisable prep+case detail.
+    return edge_type != "GOVERNS" or (
+        _normalize_govern_detail(candidate.get("detail")) is not None
+    )
 
 
 def persist_relational_edges(
@@ -270,7 +301,12 @@ def persist_relational_edges(
         to_word = _lookup_word(db, cand["to_lemma"].strip())
         if from_word is None or to_word is None:
             continue
-        detail = (cand.get("detail") or "").strip() or None
+        # GOVERNS stores the canonical "prep+Abbrev"; other types carry no detail.
+        detail = (
+            _normalize_govern_detail(cand.get("detail"))
+            if cand["edge_type"] == "GOVERNS"
+            else None
+        )
         inserted += _add_edge(
             db,
             from_word.id,
