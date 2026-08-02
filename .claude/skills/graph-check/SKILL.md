@@ -5,16 +5,16 @@ description: Audit the WortlAI lexical graph (SQLite typed-edge tables) for qual
 
 # /graph-check - lexical graph quality audit
 
-**Status: graph tables land in Phase 2.** Until `word_links` exists in the SQLite DB, report that and stop.
+**Status: live since #12.** Tables are `words` (nodes), `word_links` (typed edges: `from_word_id`, `to_word_id`, `edge_type`, `source`, `citation`, `detail`), and `error_pattern_links`. If a table is missing (a DB predating the migration), report that and stop.
 
 ## Checks (SQL against `backend/data/wortlai.db`)
 
-1. **Orphans**: words with no edges and no topic/chapter - count + sample 10.
-2. **Citation rule**: LLM-extracted edges (`source='llm'`) with NULL/empty `citation` - these violate the anti-hallucination rule and must be listed for deletion.
+1. **Orphans**: `words` with no `word_links` (in or out) and no `topic`/`chapter` - count + sample 10.
+2. **Citation rule**: LLM edges (`source='llm'`) with NULL/empty `citation`. The `ck_word_links_llm_edge_cited` CHECK makes these unwritable, so a non-zero count means the constraint was bypassed - list for deletion and investigate how they got in.
 3. **Degree outliers**: words with >30 edges (likely extraction noise) - sample their edges.
-4. **Family sanity**: sample 10 `IN_FAMILY` clusters; flag members not sharing a stem/prefix pattern for human eyes.
-5. **Government edges**: every `GOVERNS` edge must encode preposition+case (e.g. `auf+Akk`); list malformed ones.
-6. **Symmetry**: `SYNONYM`/`ANTONYM` edges missing their reverse edge.
+4. **Family sanity**: sample 10 `IN_FAMILY` clusters; flag members not sharing a `verb_infinitive` for human eyes (the derivation groups on it, so a mismatch signals bad data).
+5. **Government edges**: every `GOVERNS` edge must carry a well-formed `detail` (preposition+case, e.g. `auf+Akk`); list edges whose `detail` is NULL or not matching `^\w+\+(Akk|Dat|Gen|Nom)$`.
+6. **Symmetry**: `SYNONYM`/`ANTONYM`/`IN_FAMILY` edges missing their reverse (the writer adds both directions, so a gap means a hand-edit or partial write).
 
 ## Report
 
