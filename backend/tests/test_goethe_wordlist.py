@@ -1,18 +1,18 @@
-"""Accuracy tests for app.rag.goethe_wordlist (#13, A1 increment).
+"""Accuracy tests for app.rag.goethe_wordlist (#13, A1 + A2 increments).
 
 Two layers, mirroring #9's discipline of measuring rather than asserting:
 
-  - Pure unit tests on `_classify_entry` run everywhere, including CI where the
-    copyrighted source PDF is gitignored. They pin the grammar (article/plural/POS
-    extraction, reflexive detection, the empty-headword failure flag) directly.
-  - Integration tests parse real pages of the A1 Wortliste and measure per-field
-    precision + entry segmentation against a hand-labeled gold sample. They skip
-    when the PDF is absent.
+  - Pure unit tests on `_classify_entry` (A1 grammar) and `_parse_verb_forms` /
+    `_is_verb_form_continuation` (A2 verb conjugation) run everywhere, including CI
+    where the copyrighted source PDFs are gitignored.
+  - Integration tests parse real pages of the A1 and A2 Wortlisten. A1 measures
+    per-field precision against a hand-labeled gold sample; A2 asserts the invariant
+    that no unflagged record is junk (messy rows must be flagged, never silently
+    wrong). Both skip when their PDF is absent.
 
-The A1 list carries no English and no verb conjugation, so translation_en is always
-None and pos is "noun" (via the article) / "verb" (only the "(sich)" reflexive
-marker) / "other" - the list gives no signal to distinguish a bare verb from an
-adverb, and the parser prefers "other" to a guess.
+Goethe lists carry no English, so translation_en is always None. The A1 list has no
+verb conjugation (verb only via "(sich)"); the A2 list does, and its verbs carry a
+full VerbForm. Genuinely ambiguous rows are flagged, not guessed.
 """
 
 from pathlib import Path
@@ -20,9 +20,13 @@ from pathlib import Path
 import pytest
 
 from app.rag.goethe_wordlist import (
+    _A2_VERB_START_RE,
     _WRAPPED_PLURAL_RE,
     _classify_entry,
+    _is_verb_form_continuation,
+    _parse_verb_forms,
     parse_a1_wordlist,
+    parse_a2_wordlist,
 )
 
 # --- pure grammar tests (no PDF, always run) ------------------------------------
@@ -269,3 +273,137 @@ def test_full_document_parses_clean_and_fast():
     # article-less noun-like heads) are flagged, not silently trusted; the rest parse
     # clean. The floor stays low so a segmentation regression that mass-flags is caught.
     assert sum(r.needs_review for r in records) <= 8
+
+
+# --- A2 two-column grammar: pure verb-conjugation tests (no PDF) -----------------
+
+
+def test_parse_verb_forms_simple():
+    v = _parse_verb_forms("drucken, druckt, hat gedruckt")
+    assert v.infinitive == "drucken"
+    assert v.third_person_present == "druckt"
+    assert (v.perfect_auxiliary, v.past_participle, v.prefix) == (
+        "haben",
+        "gedruckt",
+        None,
+    )
+
+
+def test_parse_verb_forms_separable_reads_prefix():
+    v = _parse_verb_forms("einladen, lädt ein, hat eingeladen")
+    assert (v.infinitive, v.third_person_present, v.prefix) == (
+        "einladen",
+        "lädt ein",
+        "ein",
+    )
+    assert (v.perfect_auxiliary, v.past_participle) == ("haben", "eingeladen")
+
+
+def test_parse_verb_forms_sein_auxiliary():
+    v = _parse_verb_forms("einsteigen, steigt ein, ist eingestiegen")
+    assert v.perfect_auxiliary == "sein" and v.past_participle == "eingestiegen"
+
+
+def test_parse_verb_forms_modal_ignores_preterite():
+    # "dürfen, darf, durfte, hat gedurft" - the preterite piece has no field, so the
+    # 3rd-person is still darf (not durfte) and the perfect is still read.
+    v = _parse_verb_forms("dürfen, darf, durfte, hat gedurft")
+    assert (v.infinitive, v.third_person_present) == ("dürfen", "darf")
+    assert (v.perfect_auxiliary, v.past_participle) == ("haben", "gedurft")
+
+
+def test_parse_verb_forms_strips_reflexive_marker():
+    v = _parse_verb_forms("duschen (sich), duscht, hat geduscht")
+    assert v.infinitive == "duschen" and v.third_person_present == "duscht"
+
+
+def test_is_verb_form_continuation():
+    for cont in ["hat gedruckt", "druckt,", "lädt ein,", "durfte,", "ist eingestiegen"]:
+        assert _is_verb_form_continuation(cont) is True
+    for new in ["der Drucker, -", "dumm", "die Ecke, -n"]:
+        assert _is_verb_form_continuation(new) is False
+
+
+def test_a2_verb_start_re():
+    for start in ["drucken,", "duschen (sich),", "dürfen, darf,", "enden, endet,"]:
+        assert _A2_VERB_START_RE.match(start), start
+    for notstart in ["der Drucker, -", "dumm", "eigen-", "(ab)fahren,"]:
+        assert not _A2_VERB_START_RE.match(notstart), notstart
+
+
+# --- A2 integration against the real two-column Wortliste ------------------------
+
+A2_PDF_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "Deutsch_Books/goethe/wortlisten/A2/Goethe-Zertifikat_A2_Wortliste.pdf"
+)
+needs_a2_pdf = pytest.mark.skipif(
+    not A2_PDF_PATH.exists(), reason="Goethe A2 Wortliste PDF not present (gitignored)"
+)
+
+
+@pytest.fixture(scope="module")
+def a2_records():
+    return parse_a2_wordlist(A2_PDF_PATH)
+
+
+def _is_clean_lemma(rec):
+    """A parsed lemma that is not a wrapped-idiom fragment: no stray comma/paren, no
+    auxiliary lead, and a verb infinitive is a single word."""
+    lemma = rec.lemma
+    if not lemma or "," in lemma or "(" in lemma:
+        return False
+    parts = lemma.split()
+    # A multi-word "other" that opens with an auxiliary is a conjugation fragment
+    # ("hat recht", "ist dabei"); the bare auxiliaries haben/sein are themselves
+    # legitimate single-word verb entries, so only the multi-word case is junk.
+    if len(parts) > 1 and parts[0] in ("hat", "ist", "war", "sind", "haben", "hatte"):
+        return False
+    return not (rec.pos == "verb" and " " in lemma)
+
+
+@needs_a2_pdf
+def test_a2_front_and_back_matter_excluded(a2_records):
+    # The alphabetical section is pages 8-31; the WORTGRUPPEN thematic tables and the
+    # Uhrzeit/Zahlen front matter (pages 5-7) and the back cover must never appear.
+    pages = {r.source_page for r in a2_records}
+    assert min(pages) >= 8 and max(pages) <= 31
+    assert len(a2_records) > 1000  # ~1233 today; the two-column list is large
+    assert all(r.level == "A2" and r.translation_en is None for r in a2_records)
+
+
+@needs_a2_pdf
+def test_a2_no_silent_junk(a2_records):
+    # The invariant that matters: every record that is NOT flagged needs_review has a
+    # clean lemma. Messy source rows (predicate idioms, dual-gender nouns, prefix
+    # tables) are allowed, but only when honestly flagged - never silently wrong.
+    silent = [r for r in a2_records if not r.needs_review and not _is_clean_lemma(r)]
+    assert silent == [], (
+        f"{len(silent)} unflagged junk lemmas: {[r.lemma for r in silent][:10]}"
+    )
+    rate = sum(r.needs_review for r in a2_records) / len(a2_records)
+    assert rate < 0.10, (
+        f"needs_review rate {rate:.1%} too high - segmentation regressed"
+    )
+
+
+@needs_a2_pdf
+def test_a2_separable_verb_conjugation(a2_records):
+    einladen = next(r for r in a2_records if r.lemma == "einladen")
+    assert einladen.pos == "verb"
+    assert einladen.verb.third_person_present == "lädt ein"
+    assert einladen.verb.prefix == "ein"
+    assert einladen.verb.perfect_auxiliary == "haben"
+    assert einladen.verb.past_participle == "eingeladen"
+
+
+@needs_a2_pdf
+def test_a2_nouns_and_compound_merge(a2_records):
+    by_lemma = {r.lemma: r for r in a2_records}
+    drucker = by_lemma["Drucker"]
+    assert (drucker.pos, drucker.article) == ("noun", "der")
+    # "das Einkaufs-" | "zentrum, -en" merged across the hyphen wrap, as in A1.
+    assert "Einkaufszentrum" in by_lemma
+    assert by_lemma["Einkaufszentrum"].article == "das"
+    for fragment in ("Einkaufs-", "zentrum"):
+        assert fragment not in by_lemma
