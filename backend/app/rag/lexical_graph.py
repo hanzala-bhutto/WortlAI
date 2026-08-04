@@ -83,13 +83,17 @@ def _normalize_govern_detail(detail: str | None) -> str | None:
 # --- word nodes -----------------------------------------------------------------
 
 
-def persist_words(db: DbSession, records: Iterable[WordRecord]) -> list[Word]:
-    """Upsert #9 `WordRecord`s into the `words` table, keyed on (lemma, pos, level).
+def persist_words(
+    db: DbSession, records: Iterable[WordRecord], source: str = "glossary"
+) -> list[Word]:
+    """Upsert `WordRecord`s into the `words` table, keyed on (lemma, pos, level).
 
-    Re-ingesting the same glossary updates rows in place rather than duplicating
-    them - the natural key the migration's UNIQUE constraint enforces. Returns the
-    persisted `Word` rows (existing or new) in input order, so a caller can wire
-    edges off them without a second query."""
+    `source` stamps provenance (`glossary`|`goethe`|`vision`) on every row written;
+    it defaults to `"glossary"` so #9's callers are unchanged, and the Goethe path
+    (#13) passes `"goethe"`. Re-ingesting the same source updates rows in place rather
+    than duplicating them - the natural key the migration's UNIQUE constraint enforces.
+    Returns the persisted `Word` rows (existing or new) in input order, so a caller can
+    wire edges off them without a second query."""
     out: list[Word] = []
     for rec in records:
         word = db.scalar(
@@ -113,7 +117,7 @@ def persist_words(db: DbSession, records: Iterable[WordRecord]) -> list[Word]:
         word.chapter = rec.chapter
         word.chapter_title = rec.chapter_title
         word.topic = rec.topic
-        word.source = "glossary"
+        word.source = source
         word.source_page = rec.source_page
         word.needs_review = rec.needs_review
         out.append(word)

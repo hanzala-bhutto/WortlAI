@@ -78,7 +78,7 @@ class WordRecord(BaseModel):
     chapter_title: str | None = None
     topic: str | None = None
     exercise_ref: str | None = None
-    level: Literal["A1"] = "A1"
+    level: Literal["A1", "A2", "B1"] = "A1"
     source_page: int
     needs_review: bool = False
 
