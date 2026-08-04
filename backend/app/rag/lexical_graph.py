@@ -109,6 +109,7 @@ def persist_words(db: DbSession, records: Iterable[WordRecord]) -> list[Word]:
         word.verb_infinitive = rec.verb.infinitive if rec.verb else None
         word.verb_aux = rec.verb.perfect_auxiliary if rec.verb else None
         word.translation_en = rec.translation_en
+        word.example_de = rec.example_de
         word.chapter = rec.chapter
         word.chapter_title = rec.chapter_title
         word.topic = rec.topic

@@ -68,7 +68,12 @@ class WordRecord(BaseModel):
     article: Literal["der", "die", "das"] | None = None
     plural: str | None = None
     verb: VerbForm | None = None
-    translation_en: str
+    # Optional: the Netzwerk glossary (#9) always carries an English column, but the
+    # Goethe Wortlisten (#13) are German-only, so a record can have no translation.
+    translation_en: str | None = None
+    # A retained German example sentence. The A1 glossary (#9) rarely carries one; the
+    # Goethe Wortlisten (#13) give one (or more, joined) per entry.
+    example_de: str | None = None
     chapter: int | None = None
     chapter_title: str | None = None
     topic: str | None = None
