@@ -1,18 +1,19 @@
-"""Accuracy tests for app.rag.goethe_wordlist (#13, A1 + A2 increments).
+"""Accuracy tests for app.rag.goethe_wordlist (#13, A1 + A2 + B1 increments).
 
 Two layers, mirroring #9's discipline of measuring rather than asserting:
 
   - Pure unit tests on `_classify_entry` (A1 grammar) and `_parse_verb_forms` /
-    `_is_verb_form_continuation` (A2 verb conjugation) run everywhere, including CI
-    where the copyrighted source PDFs are gitignored.
-  - Integration tests parse real pages of the A1 and A2 Wortlisten. A1 measures
-    per-field precision against a hand-labeled gold sample; A2 asserts the invariant
-    that no unflagged record is junk (messy rows must be flagged, never silently
-    wrong). Both skip when their PDF is absent.
+    `_is_verb_form_continuation` (A2/B1 verb conjugation, including B1's preterite row)
+    run everywhere, including CI where the copyrighted source PDFs are gitignored.
+  - Integration tests parse real pages of the A1, A2, and B1 Wortlisten. A1 measures
+    per-field precision against a hand-labeled gold sample; A2 and B1 assert the
+    invariant that no unflagged record is junk (messy rows must be flagged, never
+    silently wrong). Each skips when its PDF is absent.
 
 Goethe lists carry no English, so translation_en is always None. The A1 list has no
-verb conjugation (verb only via "(sich)"); the A2 list does, and its verbs carry a
-full VerbForm. Genuinely ambiguous rows are flagged, not guessed.
+verb conjugation (verb only via "(sich)"); the A2/B1 lists do, and their verbs carry a
+full VerbForm. B1 is parsed by the same two-column engine as A2 (its leading thematic
+section is out of scope). Genuinely ambiguous rows are flagged, not guessed.
 """
 
 from pathlib import Path
@@ -317,8 +318,35 @@ def test_parse_verb_forms_strips_reflexive_marker():
     assert v.infinitive == "duschen" and v.third_person_present == "duscht"
 
 
+def test_parse_verb_forms_b1_preterite_row():
+    # B1 lists a preterite and shares its row with the perfect ("bog ab, ist
+    # abgebogen"); the perfect is still found and the preterite is dropped (no field).
+    v = _parse_verb_forms("abbiegen, biegt ab, bog ab, ist abgebogen")
+    assert (v.infinitive, v.third_person_present, v.prefix) == (
+        "abbiegen",
+        "biegt ab",
+        "ab",
+    )
+    assert (v.perfect_auxiliary, v.past_participle) == ("sein", "abgebogen")
+
+
+def test_parse_verb_forms_auxiliary_verb_haben():
+    # haben's own 3rd-person is "hat", which must not be mistaken for the perfect "hat
+    # gehabt" - the perfect requires a participle after the auxiliary.
+    v = _parse_verb_forms("haben, hat, hatte, hat gehabt")
+    assert v.third_person_present == "hat"
+    assert (v.perfect_auxiliary, v.past_participle) == ("haben", "gehabt")
+
+
 def test_is_verb_form_continuation():
-    for cont in ["hat gedruckt", "druckt,", "lädt ein,", "durfte,", "ist eingestiegen"]:
+    for cont in [
+        "hat gedruckt",
+        "druckt,",
+        "lädt ein,",
+        "durfte,",
+        "ist eingestiegen",
+        "bog ab, ist abgebogen",  # B1 preterite+perfect on one row
+    ]:
         assert _is_verb_form_continuation(cont) is True
     for new in ["der Drucker, -", "dumm", "die Ecke, -n"]:
         assert _is_verb_form_continuation(new) is False
@@ -407,3 +435,55 @@ def test_a2_nouns_and_compound_merge(a2_records):
     assert by_lemma["Einkaufszentrum"].article == "das"
     for fragment in ("Einkaufs-", "zentrum"):
         assert fragment not in by_lemma
+
+
+# --- B1: same two-column engine over the B1 alphabetical section -----------------
+
+B1_PDF_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "Deutsch_Books/goethe/wortlisten/B1/Goethe-Zertifikat_B1_Wortliste.pdf"
+)
+needs_b1_pdf = pytest.mark.skipif(
+    not B1_PDF_PATH.exists(), reason="Goethe B1 Wortliste PDF not present (gitignored)"
+)
+
+
+@pytest.fixture(scope="module")
+def b1_records():
+    return parse_a2_wordlist(B1_PDF_PATH, level="B1")
+
+
+@needs_b1_pdf
+def test_b1_alphabetical_section_only(b1_records):
+    # The alphabetical section is pages 16-103; the leading 3-column WORTGRUPPEN
+    # thematic section (the deferred topic material) and the intro/TOC must be excluded.
+    # The TOC repeats the "Alphabetischer Wortschatz" phrase - the margin guard must
+    # not let it flip the section on early and drag the thematic pages in.
+    pages = {r.source_page for r in b1_records}
+    assert min(pages) >= 16 and max(pages) <= 103
+    assert len(b1_records) > 2500  # ~3242 today; B1 is the largest list
+    assert all(r.level == "B1" for r in b1_records)
+
+
+@needs_b1_pdf
+def test_b1_no_silent_junk(b1_records):
+    silent = [r for r in b1_records if not r.needs_review and not _is_clean_lemma(r)]
+    assert silent == [], (
+        f"{len(silent)} unflagged junk: {[r.lemma for r in silent][:10]}"
+    )
+    rate = sum(r.needs_review for r in b1_records) / len(b1_records)
+    assert rate < 0.10, (
+        f"needs_review rate {rate:.1%} too high - segmentation regressed"
+    )
+
+
+@needs_b1_pdf
+def test_b1_preterite_verb_keeps_perfect(b1_records):
+    # "abbiegen, biegt ab, bog ab, ist abgebogen" - the preterite+perfect share a row;
+    # the perfect must land on the verb, not leak as a separate "bog ab, ..." node.
+    abbiegen = next(r for r in b1_records if r.lemma == "abbiegen")
+    assert abbiegen.pos == "verb"
+    assert abbiegen.verb.perfect_auxiliary == "sein"
+    assert abbiegen.verb.past_participle == "abgebogen"
+    assert abbiegen.verb.prefix == "ab"
+    assert not any(r.lemma.startswith("bog ab") for r in b1_records)

@@ -51,8 +51,8 @@ _LIST_END_RE = re.compile(r"^LITerATur", re.IGNORECASE)
 # Per-page furniture that sits in a word zone but is not an entry: the running page
 # code (213082_20_SV), the "INVeNTAre" running head, "Seite N" footer.
 _BOILERPLATE_RE = re.compile(
-    r"^(\d{4,}_\w+|INVeNTAre|\d*\s*WORTLISTE.*|GOETHE-ZERTIFIKAT.*|WORTGRUPPEN"
-    r"|ALPHABETISCHER.*|Seite\s+\d+|Alphabetische.*|wortliste)$",
+    r"^(\d{4,}_\w+|INVeNTAre|\d*\s*WORTLISTE.*|ZERTIFIKAT.*|GOETHE-ZERTIFIKAT.*"
+    r"|WORTGRUPPEN|\d*\s*ALPHABETISCHER.*|Seite\s+\d+|Alphabetische.*|wortliste)$",
     re.IGNORECASE,
 )
 # The mirrored running page code (e.g. "625050_40_etsiltroW_2A") is caught by the
@@ -100,13 +100,30 @@ _A2_PAGE_HEADER = "WORTLISTE"
 # lowercase infinitive (optionally "(sich)") then a comma; nouns are caught earlier by
 # their article, so a leading-lowercase-then-comma head here is a verb, not a noun.
 _A2_VERB_START_RE = re.compile(r"^[a-zäöüß]+(?:\s*\(sich\))?,")
-# The perfect form leads with an auxiliary; it both marks a row as a verb-form
-# continuation and closes the conjugation (nothing follows it in the form list).
+# The perfect form is a present-tense auxiliary (haben/sein) plus a participle:
+# "hat gedruckt", "ist abgebogen". Requiring the following participle distinguishes it
+# from a bare 3rd-person "hat" (haben's own present form), so the modal/auxiliary verbs
+# parse correctly. Its arrival closes the conjugation. A2 prints it on its own row; B1
+# shares a row with the preterite ("bog ab, ist abgebogen"), so it is found per comma-
+# piece, not only at the row start.
+_PERFECT_RE = re.compile(r"^(hat|ist|haben|sind)\s+\S")
+# A leading auxiliary or preterite marks a stray conjugation fragment for the "other"
+# review flag (war/hatte/wird are preterite, never a clean headword).
 _AUX_RE = re.compile(r"^(hat|ist|sind|haben|war|hatte|wird)\b")
-# The alphabetical section is bracketed by this heading and the back cover; the pages
-# before it (WORTGRUPPEN thematic tables, Uhrzeit/Zahlen) are the deferred topic
-# material, not alphabetical entries. Content markers, not page numbers.
-_A2_LIST_START = "ALPHABETISCHER"
+
+
+def _has_perfect(text: str) -> bool:
+    """True if any comma-separated form in `text` is a perfect (auxiliary + participle)."""
+    return any(_PERFECT_RE.match(p.strip()) for p in text.split(","))
+
+
+# The alphabetical section opens with an "Alphabetischer Wortschatz" heading (A2 caps
+# it, B1 title-cases it), after the WORTGRUPPEN thematic tables. The same phrase also
+# appears in B1's table of contents, but there it is indented (x0 ~171) with a right-
+# aligned page number, whereas the heading sits at the left margin (x0 < _A2_LEFT_EX).
+# The margin position separates the heading (trigger) from the TOC line - the A1
+# TOC-vs-heading fix again.
+_A2_LIST_START = "alphabetischer"
 
 
 def _rows_from_page(page: "pdfplumber.page.Page") -> list[list[dict]]:
@@ -320,21 +337,18 @@ def _parse_verb_forms(text: str) -> VerbForm:
     if not parts:
         return VerbForm(infinitive="")
     infinitive = parts[0].replace("(sich)", "").strip()
-    third = aux = participle = prefix = None
+    third = perfect_aux = participle = prefix = None
     for piece in parts[1:]:
-        m = _AUX_RE.match(piece)
-        if m and aux is None:
-            aux = m.group(1)
-            participle = piece[m.end() :].strip() or None
-        elif third is None:
+        m = _PERFECT_RE.match(piece)
+        if m and perfect_aux is None:
+            perfect_aux = "haben" if m.group(1) in ("hat", "haben") else "sein"
+            participle = piece[len(m.group(1)) :].strip() or None
+        elif third is None and not _PERFECT_RE.match(piece):
+            # the first non-perfect form after the infinitive is the 3rd-person present;
+            # a later preterite piece ("durfte", "bog ab") has no field and is dropped.
             third = piece
     if third and " " in third:
         prefix = third.split()[-1]
-    perfect_aux = None
-    if aux in ("hat", "haben", "hatte"):
-        perfect_aux = "haben"
-    elif aux in ("ist", "sind", "war"):
-        perfect_aux = "sein"
     return VerbForm(
         prefix=prefix,
         infinitive=infinitive,
@@ -346,11 +360,12 @@ def _parse_verb_forms(text: str) -> VerbForm:
 
 def _is_verb_form_continuation(head: str) -> bool:
     """True if `head` extends an open verb's conjugation rather than starting a new
-    entry: an article marks a new noun, but an auxiliary-led perfect or a comma-
-    terminated wrapped form ("durfte,", "lädt ein,") continues the verb."""
+    entry: an article marks a new noun, and a bare word (no comma, no perfect) is a new
+    "other"; a wrapped form carries a comma ("durfte,", "lädt ein,", "bog ab, ist
+    abgebogen") or is a perfect ("hat gedruckt")."""
     if _ARTICLE_NOUN_RE.match(head):
         return False
-    return bool(_AUX_RE.match(head) or head.endswith(","))
+    return "," in head or _has_perfect(head)
 
 
 def _classify_a2_entry(
@@ -429,7 +444,7 @@ def _consume_a2_column(
             head_parts.append(head)
             if example:
                 example_parts.append(example)
-            if _AUX_RE.match(head):
+            if _has_perfect(head):
                 verb_open = False
             continue
         # A predicate idiom ("dabei (sein)", "recht haben") or paren-prefix verb
@@ -488,13 +503,24 @@ def _consume_a2_column(
     flush()
 
 
+def _is_list_start(rows: list[list[dict]]) -> bool:
+    """True if a page carries the "Alphabetischer Wortschatz" section heading. The same
+    phrase in B1's table of contents is excluded because there it is indented, while the
+    heading word sits at the left margin (x0 < the example-zone boundary)."""
+    return any(
+        _A2_LIST_START in w["text"].lower() and w["x0"] < _A2_LEFT_EX
+        for row in rows
+        for w in row
+    )
+
+
 def parse_a2_wordlist(pdf_path: Path, level: str = "A2") -> list[WordRecord]:
     """Parse a Goethe two-column alphabetical Wortliste into WordRecords - the A2 list
-    whole, or the B1 alphabetical section (pass level="B1"). Only pages whose running
-    header is "WORTLISTE" are read, skipping the Vorwort and thematic front matter and
-    the back cover. Each such page is split into two column streams folded
-    independently; nouns and "other" reuse the A1 grammar, verbs use the conjugation
-    accumulator. `level` stamps the source list's CEFR level."""
+    whole, or the B1 alphabetical section (pass level="B1"). Parsing starts at the
+    "Alphabetischer Wortschatz" heading, skipping the Vorwort and the thematic front
+    matter; the back cover is skipped by its non-content header. Each content page is
+    split into two column streams folded independently; nouns and "other" reuse the A1
+    grammar, verbs use the conjugation accumulator. `level` stamps the CEFR level."""
     records: list[WordRecord] = []
     in_list = False
     with pdfplumber.open(pdf_path) as pdf:
@@ -503,16 +529,18 @@ def parse_a2_wordlist(pdf_path: Path, level: str = "A2") -> list[WordRecord]:
             if not rows:
                 continue
             if not in_list:
-                # The alphabetical section opens at the "ALPHABETISCHER WORTSCHATZ"
-                # heading; everything before it is the deferred thematic front matter.
-                if any(_A2_LIST_START in w["text"] for row in rows for w in row):
+                if _is_list_start(rows):
                     in_list = True
                 else:
                     continue
             # Inside the section every page is content, but the back cover (a mirrored
-            # page-code header) is not; content pages run "WORTLISTE"/"GOETHE-ZERTIFIKAT".
+            # page-code header) is not; content pages run the "WORTLISTE" or
+            # "(GOETHE-)ZERTIFIKAT" running header (A2 uses the former pair, B1 the
+            # latter).
             header = " ".join(w["text"] for w in rows[0])
-            if not header.startswith((_A2_PAGE_HEADER, "GOETHE-ZERTIFIKAT")):
+            if not header.startswith(
+                (_A2_PAGE_HEADER, "ZERTIFIKAT", "GOETHE-ZERTIFIKAT")
+            ):
                 continue
             left, right = _a2_column_streams(rows)
             _consume_a2_column(left, records, page.page_number, level)
