@@ -50,6 +50,21 @@ def _noun(lemma, article, *, translation="(test)", topic=None, page=1):
     )
 
 
+def _goethe_noun(lemma, article, *, level="A1", page=1):
+    # A Goethe-shaped record (#13): German-only, so translation_en is None. The write
+    # path must accept this rather than tripping the old NOT NULL on translation_en.
+    return WordRecord(
+        lemma=lemma,
+        lemma_raw=f"{article} {lemma}",
+        pos="noun",
+        article=article,
+        translation_en=None,
+        example_de=f"Ein Beispiel mit {lemma}.",
+        level=level,
+        source_page=page,
+    )
+
+
 # --- word nodes -----------------------------------------------------------------
 
 
@@ -62,6 +77,39 @@ def test_persist_words_writes_nodes_with_structural_fields(db_session):
     assert word.article == "die"
     assert word.topic == "Arbeit"
     assert word.source == "glossary"
+
+
+def test_persist_words_stores_german_only_goethe_row(db_session):
+    # A Goethe row carries no English; persisting it must not trip the translation_en
+    # NOT NULL that used to block the German-only path (#13). source is stamped "goethe".
+    persist_words(db_session, [_goethe_noun("Flughafen", "der")], source="goethe")
+    db_session.commit()
+
+    word = db_session.scalar(select(Word))
+    assert word.lemma == "Flughafen"
+    assert word.translation_en is None
+    assert word.source == "goethe"
+    assert word.example_de == "Ein Beispiel mit Flughafen."
+
+
+def test_persist_words_source_defaults_to_glossary(db_session):
+    # The source param defaults so #9's existing callers keep writing "glossary".
+    persist_words(db_session, [_noun("Messe", "die")])
+    db_session.commit()
+    assert db_session.scalar(select(Word.source)) == "glossary"
+
+
+def test_persist_words_same_lemma_distinct_source_and_level_coexist(db_session):
+    # gehen as glossary-A1 and goethe-A2 are different nodes: the (lemma, pos, level)
+    # key keeps them apart, and source records which list each came from.
+    persist_words(db_session, [_noun("Reise", "die")])
+    persist_words(
+        db_session, [_goethe_noun("Reise", "die", level="A2")], source="goethe"
+    )
+    db_session.commit()
+
+    rows = db_session.scalars(select(Word).order_by(Word.level)).all()
+    assert [(w.level, w.source) for w in rows] == [("A1", "glossary"), ("A2", "goethe")]
 
 
 def test_persist_words_is_idempotent_on_reingest(db_session):

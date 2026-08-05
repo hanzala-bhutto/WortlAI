@@ -139,7 +139,9 @@ class Word(Base):
     # mostly does not (docs/feasibility/012); #10's Redemittel/grammar text is the
     # richer citation corpus. Nullable so a bare word list still stores.
     example_de: Mapped[str | None] = mapped_column(Text, default=None)
-    translation_en: Mapped[str] = mapped_column(Text)
+    # Nullable: the Netzwerk glossary (#9) always carries an English column, but the
+    # Goethe Wortlisten (#13) are German-only, so a Goethe row stores without one.
+    translation_en: Mapped[str | None] = mapped_column(Text, default=None)
     level: Mapped[str] = mapped_column(String(8), index=True)
     chapter: Mapped[int | None] = mapped_column(Integer, default=None)
     chapter_title: Mapped[str | None] = mapped_column(String(200), default=None)
