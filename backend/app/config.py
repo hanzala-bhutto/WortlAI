@@ -62,6 +62,12 @@ class Settings(BaseSettings):
 
     data_dir: Path = BACKEND_DIR / "data"
 
+    # Root of the source PDF corpus the ingestion pipeline (#13+) reads. A local
+    # path like data_dir, gitignored and copyrighted, so it carries a default and
+    # isn't treated as a service address that could point somewhere plausible and
+    # wrong. The ingest CLI's --source overrides it.
+    books_dir: Path = REPO_ROOT / "Deutsch_Books"
+
     # Tutor tuning. Tunables with sane defaults (like data_dir), so a fresh clone
     # runs without setting them, but changing them never needs a code edit:
     # - which Langfuse prompt label the Tutor speaks with (flip to "staging" to
