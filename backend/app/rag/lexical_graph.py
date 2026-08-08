@@ -24,6 +24,7 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -123,6 +124,62 @@ def persist_words(
         out.append(word)
     db.flush()
     return out
+
+
+# --- thematic topics: merge onto existing rows without clobbering (#71) ----------
+
+
+@dataclass
+class TopicStats:
+    matched: int  # existing (lemma, pos, level) rows the topic was stamped onto
+    inserted: int  # thematic-only lemmas added as new rows
+
+
+def apply_topics(
+    db: DbSession, records: Iterable[WordRecord], source: str = "goethe"
+) -> tuple[TopicStats, list[Word]]:
+    """Stamp thematic topics onto word rows without disturbing their other fields.
+
+    The alphabetical parser leaves `Word.topic` null; this runs *after* it in the same
+    ingest and fills the topic in. On a lemma already stored at (lemma, pos, level) only
+    `topic` is set - the alphabetical row's example_de/verb/plural are preserved, which
+    is exactly why the thematic records must not go through `persist_words` (a full-row
+    overwrite). A thematic-only lemma (in a whitelisted group but absent from the
+    alphabetical list) is inserted as a new row, so genuine vocabulary is not lost.
+
+    Returns the run's (matched, inserted) counts and the touched rows, so the caller can
+    fold them into its coverage count. Idempotent: a re-run finds the once-inserted rows
+    and matches them, so no duplicates and the touched set is stable."""
+    matched = inserted = 0
+    touched: list[Word] = []
+    for rec in records:
+        word = db.scalar(
+            select(Word).where(
+                Word.lemma == rec.lemma,
+                Word.pos == rec.pos,
+                Word.level == rec.level,
+            )
+        )
+        if word is None:
+            word = Word(
+                lemma=rec.lemma,
+                lemma_raw=rec.lemma_raw,
+                pos=rec.pos,
+                article=rec.article,
+                plural=rec.plural,
+                level=rec.level,
+                source=source,
+                source_page=rec.source_page,
+                needs_review=rec.needs_review,
+            )
+            db.add(word)
+            inserted += 1
+        else:
+            matched += 1
+        word.topic = rec.topic
+        touched.append(word)
+    db.flush()
+    return TopicStats(matched=matched, inserted=inserted), touched
 
 
 # --- deterministic edges: IN_FAMILY ---------------------------------------------
