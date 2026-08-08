@@ -75,6 +75,7 @@ def test_ingest_goethe_persists_with_source_and_stats(
         "B1": [_rec("Abzug", "B1")],
     }
     monkeypatch.setattr(ingest_mod, "_parse_level", lambda level, path: fake[level])
+    monkeypatch.setattr(ingest_mod, "_parse_topics", lambda paths: [])
 
     stats = ingest_goethe(db_session, root)
 
@@ -109,6 +110,7 @@ def test_ingest_goethe_stats_surface_homograph_merge(tmp_path, db_session, monke
         "_parse_level",
         lambda level, path: [band_der, band_das] if level == "B1" else [],
     )
+    monkeypatch.setattr(ingest_mod, "_parse_topics", lambda paths: [])
 
     stats = ingest_goethe(db_session, root)
 
@@ -126,6 +128,7 @@ def test_ingest_goethe_is_idempotent(tmp_path, db_session, monkeypatch):
         "B1": [_rec("Abzug", "B1")],
     }
     monkeypatch.setattr(ingest_mod, "_parse_level", lambda level, path: fake[level])
+    monkeypatch.setattr(ingest_mod, "_parse_topics", lambda paths: [])
 
     ingest_goethe(db_session, root)
     ingest_goethe(db_session, root)
@@ -133,11 +136,51 @@ def test_ingest_goethe_is_idempotent(tmp_path, db_session, monkeypatch):
     assert db_session.scalar(select(func.count()).select_from(Word)) == 3
 
 
+def test_ingest_goethe_topics_tag_and_insert_with_stats(
+    tmp_path, db_session, monkeypatch
+):
+    # The topic pass runs after the alphabetical persist: it tags an existing row without
+    # clobbering its example sentence, inserts a thematic-only lemma, and both are counted.
+    root = _touch_goethe_tree(tmp_path)
+    alpha = _rec("Hund", "B1")
+    alpha.example_de = "Der Hund bellt."
+    monkeypatch.setattr(
+        ingest_mod, "_parse_level", lambda level, path: [alpha] if level == "B1" else []
+    )
+    tiere = [
+        WordRecord(
+            lemma=lemma,
+            lemma_raw=f"der {lemma}, -e",
+            pos="noun",
+            article="der",
+            plural="-e",
+            topic="Tiere",
+            level="B1",
+            source_page=13,
+        )
+        for lemma in (
+            "Hund",
+            "Pinguin",
+        )  # Hund exists alphabetically, Pinguin is orphan
+    ]
+    monkeypatch.setattr(ingest_mod, "_parse_topics", lambda paths: tiere)
+
+    stats = ingest_goethe(db_session, root)
+
+    hund = db_session.scalar(select(Word).where(Word.lemma == "Hund"))
+    assert hund.topic == "Tiere" and hund.example_de == "Der Hund bellt."
+    pinguin = db_session.scalar(select(Word).where(Word.lemma == "Pinguin"))
+    assert pinguin is not None and pinguin.source == "goethe"
+    assert (stats.topics.matched, stats.topics.inserted) == (1, 1)
+    assert stats.total_words == 2  # Hund (alphabetical) + Pinguin (inserted orphan)
+
+
 def test_write_stats_returns_previous_run_for_diff(tmp_path, db_session, monkeypatch):
     root = _touch_goethe_tree(tmp_path)
     monkeypatch.setattr(
         ingest_mod, "_parse_level", lambda level, path: [_rec("x", level)]
     )
+    monkeypatch.setattr(ingest_mod, "_parse_topics", lambda paths: [])
     data_dir = tmp_path / "data"
 
     stats = ingest_goethe(db_session, root)
@@ -173,11 +216,13 @@ def test_ingest_goethe_end_to_end(db_session):
         == 0
     )
     # The needs_review flag must survive persistence, so /graph-check can audit the
-    # ambiguous rows rather than have them silently vanish or arrive all-clean.
+    # ambiguous rows rather than have them silently vanish or arrive all-clean. The DB
+    # count is at least the per-level sum: the thematic pass can insert its own flagged
+    # rows (slash-compound topic cells), which the level stats do not include.
     flagged_in_db = db_session.scalar(
         select(func.count()).select_from(Word).where(Word.needs_review.is_(True))
     )
-    assert flagged_in_db == sum(s.needs_review for s in stats.levels) > 0
+    assert flagged_in_db >= sum(s.needs_review for s in stats.levels) > 0
     assert stats.family_edges > 0  # separable verbs share an infinitive -> edges
 
 

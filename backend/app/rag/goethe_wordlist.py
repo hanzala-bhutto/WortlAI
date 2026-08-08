@@ -14,8 +14,13 @@ Goethe rows on the same path as the glossary:
     columns split at a fixed midpoint, each column repeating the A1 two-zone geometry
     (docs/experiments/013-goethe-a2-b1-layout-census.md). Here the headword zone also
     carries verbs with wrapping conjugation ("einladen, lädt ein, hat eingeladen"),
-    parsed into a VerbForm. B1's leading thematic section is the deferred WORTGRUPPEN
-    material and is not parsed here.
+    parsed into a VerbForm. B1's leading thematic section is parsed separately.
+  - `parse_b1_topics` / `parse_a2_topics` (#71) - the thematic (WORTGRUPPEN) sections that
+    precede the alphabetical list: words grouped under topic headers, carried into
+    WordRecord.topic. B1 uses numbered headers ("1.11 TIERE"); A2 uses text column headers
+    over article-less, column-aligned entries. Only clean noun groups are parsed
+    (docs/feasibility/071); the reference-data groups (numbers, dates, currency,
+    abbreviations, grades, colours) are skipped.
 
 Nothing guesses where the grammar ends and the sentence begins, because the PDF
 already separates them by x-position - #9's column-split idea (glossary_parser
@@ -545,4 +550,260 @@ def parse_a2_wordlist(pdf_path: Path, level: str = "A2") -> list[WordRecord]:
             left, right = _a2_column_streams(rows)
             _consume_a2_column(left, records, page.page_number, level)
             _consume_a2_column(right, records, page.page_number, level)
+    return records
+
+
+# --- thematic WORTGRUPPEN stage (#71) -------------------------------------------
+# The A2/B1 lists open with a thematic (WORTGRUPPEN) section that groups words under
+# topic headers, before the alphabetical Wortschatz. A word's topic group is carried
+# into Word.topic for the curriculum side of the graph. Only *clean noun groups* are
+# parsed (docs/feasibility/071-goethe-wortgruppen-topic.md): the reference-data groups
+# (numbers, dates, currency, abbreviations, grades, colours) are deliberately skipped -
+# their entries are not lemmas and would be junk nodes. The whitelist key matches the
+# topic header uppercased; the value is the canonical label stored on the row.
+_TOPIC_WHITELIST = {
+    "TIERE": "Tiere",
+    "POLITISCHE BEGRIFFE": "Politische Begriffe",
+    "HIMMELSRICHTUNGEN": "Himmelsrichtungen",
+    "BILDUNGSEINRICHTUNGEN": "Bildungseinrichtungen",
+    "LÄNDER": "Länder und Nationalitäten",
+}
+# A B1 thematic topic header is a two-part section number alone in the row's first
+# token ("1.11", then "TIERE"); a sub-header ("1.14.1 DATUM") has three parts and is
+# not matched, so its group never activates.
+_TOPIC_HEADER_RE = re.compile(r"^\d+\.\d+$")
+_ARTICLES = ("der", "die", "das")
+# A thematic noun cell: article + noun, then an optional plural marker but only after a
+# comma ("der Affe, -n"). Unlike the alphabetical grammar this does NOT sweep trailing
+# tokens into the plural - the grids annotate a noun with a derived form ("der Norden
+# Nord-/nördlich") that is not its plural, so a no-comma tail is dropped, not stored. A
+# slash glued straight to the noun ("die Krippe/der Kindergarten") marks a multi-lemma
+# compound: the first lemma is kept but flagged, since the rest is not captured.
+_THEMATIC_NOUN_RE = re.compile(
+    r"^(der|die|das)\s+([A-ZÄÖÜ][\wäöüß.\-]*)(/)?(?:,\s*(\S+))?"
+)
+# What a comma-tail must look like to be a plural marker: a hyphen or diaeresis group
+# ("-n", "¨-e"), an umlauted stem vowel then hyphen, or a "(pl.)"/"(Sg.)" note. A tail
+# that is none of these is a second lemma, not a plural ("die Realschule, Sekundarschule"
+# on a Swiss school-type list), and is flagged rather than stored as a bogus plural.
+_THEMATIC_PLURAL_RE = re.compile(r"^(?:[-¨]|[ÄÖÜäöü]-|\()")
+
+
+def _topic_for_header(title: str) -> str | None:
+    """Map a topic-header title to its canonical Word.topic label, or None when the
+    group is off the parse whitelist. Matched on an uppercased prefix so the long
+    "LÄNDER, KONTINENTE, NATIONALITÄTEN ..." header resolves off its first word."""
+    upper = title.strip().upper()
+    for key, label in _TOPIC_WHITELIST.items():
+        if upper.startswith(key):
+            return label
+    return None
+
+
+def _thematic_cells(row: list[dict]) -> list[str]:
+    """Split one thematic row into per-article cell strings. The thematic grids run
+    1-3 columns wide with no fixed x boundary (TIERE is 3-column, HIMMELSRICHTUNGEN
+    1), but every noun cell is led by a lowercase article, so the article tokens - not
+    an x-coordinate - segment the row. Tokens before the first article (a region label
+    like "Deutschland", a numeral) are furniture and dropped. A slash-list that wraps onto
+    a second physical row without repeating the article ("...Realschule/" then
+    "Gesamtschule/Berufsschule/...") yields no cell for the wrapped line: those extra
+    lemmas are not captured - an accepted gap in the already-flagged Bildungseinrichtungen
+    group (docs/feasibility/071), not silent loss of a clean entry."""
+    cells: list[str] = []
+    current: list[str] | None = None
+    for w in row:
+        if w["text"] in _ARTICLES:
+            if current is not None:
+                cells.append(" ".join(current))
+            current = [w["text"]]
+        elif current is not None:
+            current.append(w["text"])
+    if current is not None:
+        cells.append(" ".join(current))
+    return cells
+
+
+def _classify_thematic_cell(
+    cell: str, topic: str, page_no: int, level: str
+) -> WordRecord | None:
+    """Parse one article-led thematic cell into a noun WordRecord tagged with `topic`,
+    or None when the cell is not a clean article + noun (an adjective, a bare region
+    label, a parenthesised head) - those are dropped rather than guessed, the #9
+    discipline. Flagged for review when a slash-compound glues several lemmas under one
+    article, or when the comma-tail is not a plural marker (a second lemma we can't own)."""
+    match = _THEMATIC_NOUN_RE.match(cell)
+    if not match:
+        return None
+    article, lemma, compound, tail = match.groups()
+    needs_review = bool(compound)
+    plural = None
+    if tail:
+        if _THEMATIC_PLURAL_RE.match(tail):
+            plural = tail.rstrip(",;")
+        else:
+            # a comma-tail that isn't a plural is an alternate lemma, not grammar; keep
+            # the noun but flag rather than store the tail as a bogus plural.
+            needs_review = True
+    return WordRecord(
+        lemma=lemma,
+        lemma_raw=cell,
+        pos="noun",
+        article=article,
+        plural=plural,
+        topic=topic,
+        level=level,
+        source_page=page_no,
+        needs_review=needs_review,
+    )
+
+
+def parse_b1_topics(pdf_path: Path) -> list[WordRecord]:
+    """Parse the B1 thematic (WORTGRUPPEN) section into topic-tagged noun WordRecords.
+
+    The section precedes the "Alphabetischer Wortschatz" heading; parsing stops there
+    so no alphabetical entry is double-read. Topics are stacked vertically, one active
+    at a time, so a single current-topic pointer flips at each numbered header row.
+    Only whitelisted noun groups emit rows; every other group, and every non-noun cell,
+    is skipped. `example_de` stays None - the thematic grid carries no sentences."""
+    records: list[WordRecord] = []
+    topic: str | None = None
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            rows = _rows_from_page(page)
+            if _is_list_start(rows):
+                break
+            for row in rows:
+                if _TOPIC_HEADER_RE.match(row[0]["text"]):
+                    title = " ".join(w["text"] for w in row[1:])
+                    topic = _topic_for_header(title)
+                    continue
+                if topic is None:
+                    continue
+                for cell in _thematic_cells(row):
+                    rec = _classify_thematic_cell(cell, topic, page.page_number, "B1")
+                    if rec is not None:
+                        records.append(rec)
+    return records
+
+
+# The A2 front-matter thematic tables (pages 5-7) differ from B1's numbered section: no
+# article precedes the noun ("Arzt, Ä-e"), and the topic is a text column header, not a
+# "1.11" number. But each column is left-aligned, so the lemma is the token sitting at
+# the header's x0 - that alignment, not an article, anchors the parse. Only the two
+# clean noun groups are whitelisted (docs/feasibility/071); the header key is the title's
+# first token, the value the canonical Word.topic label.
+_A2_TOPIC_WHITELIST = {
+    "Berufe": "Berufe",
+    "Schule": "Schule und Schulfächer",
+}
+# Entries align under the header's x0 within a few points; a column is ~130pt wide, which
+# bounds an entry's cell so a neighbouring column's tokens do not bleed in (measured on
+# the A2 front matter: origins ~89 / ~260 / ~410).
+_A2_TOPIC_X_TOL = 6
+_A2_TOPIC_COL_WIDTH = 130
+# Each column stacks several groups; entries sit ~13pt apart, but a new group's header is
+# set off by roughly double that. A vertical gap over this threshold ends the whitelisted
+# group, so its column read stops before the next (e.g. Berufe -> Himmelsrichtungen).
+_A2_TOPIC_GROUP_GAP = 20
+# The WORTGRUPPEN section heading sits at the left margin on its own row. The table of
+# contents lists "Wortgruppen"/"Berufe"/"Schule" too, but indented (x0 ~143), so the same
+# margin guard the alphabetical parser uses keeps the TOC from being read as tables.
+_A2_WORTGRUPPEN_START = "wortgruppen"
+# A plural marker is a hyphen group, optionally led by a stem-vowel umlaut. The PDF writes
+# that umlaut as a standalone diaeresis "¨" (as _WRAPPED_PLURAL_RE also handles), so "¨-e"
+# ("Stundenplan, ¨-e") must match; a "(Sg.)" annotation is not a plural and is left off.
+_A2_TOPIC_PLURAL_RE = re.compile(r"^[¨ÄÖÜäöü]?-")
+
+
+def _a2_topic_record(col: list[dict], topic: str, page_no: int) -> WordRecord | None:
+    """Build a WordRecord from one A2 thematic column cell (the tokens aligned under a
+    header). The lemma is the leading token up to its comma (article-less); the plural is
+    the marker glued after that comma or in the next token. A masc/fem pair - written with
+    a "/" ("Bäcker, - / Bäckerin") or a ";" ("Autor, -en; Autorin") - keeps the primary
+    lemma but flags the row, since the second form is not captured. A non-capitalised lead
+    is a wrapped continuation row ("ter, -n") and yields None."""
+    if not col[0]["text"][:1].isupper():
+        return None
+    lemma, _, tail = col[0]["text"].partition(",")
+    lemma = lemma.strip()
+    if not lemma or not lemma[0].isalpha():
+        return None
+    plural = tail.strip().rstrip(",;") or None
+    if plural is None and len(col) > 1 and _A2_TOPIC_PLURAL_RE.match(col[1]["text"]):
+        plural = col[1]["text"].rstrip(",;")
+    raw = " ".join(w["text"] for w in col)
+    return WordRecord(
+        lemma=lemma,
+        lemma_raw=raw,
+        pos="noun",
+        article=None,
+        plural=plural,
+        topic=topic,
+        level="A2",
+        source_page=page_no,
+        needs_review="/" in raw or ";" in raw,
+    )
+
+
+def _is_wortgruppen_start(rows: list[list[dict]]) -> bool:
+    """True if a page carries the WORTGRUPPEN section heading at the left margin. The TOC
+    lists the same word indented (x0 > the example-zone boundary), so the margin position
+    separates the heading (trigger) from the contents line - the alphabetical guard again."""
+    return any(
+        _A2_WORTGRUPPEN_START in w["text"].lower() and w["x0"] < _A2_LEFT_EX
+        for row in rows
+        for w in row
+    )
+
+
+def parse_a2_topics(pdf_path: Path) -> list[WordRecord]:
+    """Parse the A2 front-matter thematic tables into topic-tagged noun WordRecords.
+
+    Only the whitelisted columns (Berufe, Schule und Schulfächer) are read, and only within
+    the WORTGRUPPEN section - bounded below by its margin heading and above by the
+    alphabetical heading, so neither the table of contents / Vorwort nor the alphabetical
+    list leaks in. Entries are read from the rows below each header, aligned to the header's
+    x0. `example_de` stays None - the thematic tables carry no sentences.
+
+    Headers are re-found per page; each whitelisted group is self-contained on the page it
+    starts on (Berufe on 5, Schule on 6), so a group is not carried across a page break. If
+    the source were re-paginated to split one column across pages, the tail would be missed -
+    unlike parse_b1_topics, whose active topic survives the page loop."""
+    records: list[WordRecord] = []
+    in_section = False
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            rows = _rows_from_page(page)
+            if _is_list_start(rows):
+                break
+            if not in_section and _is_wortgruppen_start(rows):
+                in_section = True
+            if not in_section:
+                continue
+            headers = [
+                (w["x0"], w["top"], _A2_TOPIC_WHITELIST[w["text"]])
+                for row in rows
+                for w in row
+                if w["text"] in _A2_TOPIC_WHITELIST
+            ]
+            for hx, htop, topic in headers:
+                prev_top = None
+                for row in rows:
+                    col = [
+                        w
+                        for w in row
+                        if hx - _A2_TOPIC_X_TOL <= w["x0"] < hx + _A2_TOPIC_COL_WIDTH
+                    ]
+                    if not col or col[0]["top"] <= htop:
+                        continue
+                    top = col[0]["top"]
+                    # A gap larger than the row pitch means the next stacked group has
+                    # started; stop before it so a non-whitelisted group is not read in.
+                    if prev_top is not None and top - prev_top > _A2_TOPIC_GROUP_GAP:
+                        break
+                    prev_top = top
+                    rec = _a2_topic_record(col, topic, page.page_number)
+                    if rec is not None:
+                        records.append(rec)
     return records

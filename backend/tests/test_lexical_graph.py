@@ -18,6 +18,7 @@ from app.llmops.prompts import PromptStore
 from app.rag.glossary_parser import VerbForm, WordRecord
 from app.rag.lexical_graph import (
     Lemmatizer,
+    apply_topics,
     citation_is_valid,
     derive_family_edges,
     extract_relational_edges,
@@ -122,6 +123,63 @@ def test_persist_words_is_idempotent_on_reingest(db_session):
     rows = db_session.scalars(select(Word)).all()
     assert len(rows) == 1
     assert rows[0].translation_en == "trade fair"
+
+
+# --- thematic topics: apply_topics (#71) ----------------------------------------
+
+
+def _topic_rec(lemma, *, level="B1", topic="Tiere"):
+    return WordRecord(
+        lemma=lemma,
+        lemma_raw=f"der {lemma}, -e",
+        pos="noun",
+        article="der",
+        plural="-e",
+        topic=topic,
+        level=level,
+        source_page=13,
+    )
+
+
+def test_apply_topics_tags_existing_row_without_clobbering(db_session):
+    # An alphabetical row already carries an example sentence; the topic pass must set
+    # only `topic` and leave example_de/plural intact (persist_words would overwrite them).
+    persist_words(
+        db_session, [_goethe_noun("Hund", "der", level="B1")], source="goethe"
+    )
+    db_session.commit()
+
+    stats, touched = apply_topics(db_session, [_topic_rec("Hund")])
+    db_session.commit()
+
+    word = db_session.scalar(select(Word).where(Word.lemma == "Hund"))
+    assert word.topic == "Tiere"
+    assert word.example_de == "Ein Beispiel mit Hund."  # preserved, not nulled
+    assert (stats.matched, stats.inserted) == (1, 0)
+    assert [w.lemma for w in touched] == ["Hund"]
+
+
+def test_apply_topics_inserts_orphan_lemma_as_new_goethe_row(db_session):
+    # A thematic-only lemma (no alphabetical row) is inserted, so genuine vocabulary is
+    # not lost; it lands as a Goethe row carrying the topic and no example sentence.
+    stats, _ = apply_topics(db_session, [_topic_rec("Pinguin")])
+    db_session.commit()
+
+    word = db_session.scalar(select(Word).where(Word.lemma == "Pinguin"))
+    assert word is not None
+    assert (word.topic, word.source, word.example_de) == ("Tiere", "goethe", None)
+    assert (stats.matched, stats.inserted) == (0, 1)
+
+
+def test_apply_topics_is_idempotent(db_session):
+    apply_topics(db_session, [_topic_rec("Pinguin")])
+    db_session.commit()
+    # Re-run: the once-inserted orphan is now found and matched, not inserted again.
+    stats, _ = apply_topics(db_session, [_topic_rec("Pinguin")])
+    db_session.commit()
+
+    assert db_session.scalar(select(func.count()).select_from(Word)) == 1
+    assert (stats.matched, stats.inserted) == (1, 0)
 
 
 # --- deterministic IN_FAMILY ----------------------------------------------------
