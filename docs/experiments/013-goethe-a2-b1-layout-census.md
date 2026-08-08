@@ -38,10 +38,14 @@ zone, ending on an auxiliary-led perfect (`hat`/`ist ...`). Nouns (`der Drucker,
 and bare "other" heads (`dumm`, `durch`, `eigen-`) are unchanged from A1.
 
 **B1 - two different sections, not one.** B1 is *not* a single two-column list:
-- **Thematic section** (pages ~9-39): a **3-column** grid of `article Noun, plural`
-  grouped under topic headers (`1.11 TIERE`), **no example sentences**. This is the
-  WORTGRUPPEN/topic material.
-- **Alphabetical section** (pages ~40-103): **2-column**, and structurally identical
+- **Thematic section** (PDF pages 8-15): a grid grouped under topic headers
+  (`1.11 TIERE`), **no example sentences**. This is the WORTGRUPPEN/topic material.
+  (Corrected in #71: this census first read "pages ~9-39", conflating the TOC's printed
+  page numbers with PDF indices. The `2 Alphabetischer Wortschatz` heading is at PDF page
+  16, so the thematic block is ~8 pages, not ~31. The `article Noun, plural` "3-column"
+  shape holds only for some groups; others are 1-column or regionally grouped tables -
+  see `docs/feasibility/071-goethe-wortgruppen-topic.md`.)
+- **Alphabetical section** (PDF pages 16-103): **2-column**, and structurally identical
   to A2's alphabetical list - same verb-conjugation grammar, same midpoint split.
 
 ## Finding
