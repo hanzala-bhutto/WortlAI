@@ -19,8 +19,18 @@ from sqlalchemy.orm import Session as DbSession
 from app.config import get_settings
 from app.learner.db import session_scope
 from app.rag.glossary_parser import WordRecord
-from app.rag.goethe_wordlist import parse_a1_wordlist, parse_a2_wordlist
-from app.rag.lexical_graph import derive_family_edges, persist_words
+from app.rag.goethe_wordlist import (
+    parse_a1_wordlist,
+    parse_a2_topics,
+    parse_a2_wordlist,
+    parse_b1_topics,
+)
+from app.rag.lexical_graph import (
+    TopicStats,
+    apply_topics,
+    derive_family_edges,
+    persist_words,
+)
 
 # The canonical Goethe list per level, relative to {source}/goethe/wortlisten/. A1 is
 # the Start-Deutsch-1 list the A1 parser targets - deliberately not the Fit1 children's
@@ -45,13 +55,13 @@ class LevelStats:
 class GoetheStats:
     levels: list[LevelStats]
     family_edges: int
-
-    @property
-    def total_words(self) -> int:
-        """Distinct word rows written across all levels - the coverage denominator.
-        Below the parsed total because the words UNIQUE key is (lemma, pos, level),
-        so a homograph differing only by gender (der/das Band) merges into one row."""
-        return sum(level.stored for level in self.levels)
+    topics: TopicStats  # thematic topics stamped/added (#71)
+    # Distinct word rows written: the alphabetical rows per level plus the thematic-only
+    # lemmas the topic pass inserted. Below the parsed total because the words UNIQUE key
+    # is (lemma, pos, level), so a homograph differing only by gender (der/das Band)
+    # merges into one row. Computed as a stable row-id union, so a re-run reports the same
+    # number (the topic pass matches its once-inserted rows rather than inserting again).
+    total_words: int
 
 
 def goethe_pdf_paths(source_root: Path) -> dict[str, Path]:
@@ -79,6 +89,13 @@ def _parse_level(level: str, path: Path) -> list[WordRecord]:
     return parse_a2_wordlist(path, level=level)
 
 
+def _parse_topics(paths: dict[str, Path]) -> list[WordRecord]:
+    """Parse the thematic WORTGRUPPEN sections (#71) into topic-tagged records: the B1
+    numbered section and the A2 front-matter tables. A seam of its own so tests can
+    substitute it without a real PDF, as with `_parse_level`."""
+    return parse_b1_topics(paths["B1"]) + parse_a2_topics(paths["A2"])
+
+
 def ingest_goethe(db: DbSession, source_root: Path) -> GoetheStats:
     """Parse the A1/A2/B1 Wortlisten under ``source_root`` and persist them as Goethe
     word nodes, then derive verb-family edges once over the combined set.
@@ -88,12 +105,14 @@ def ingest_goethe(db: DbSession, source_root: Path) -> GoetheStats:
     (lemma, pos, level), so re-running updates rows in place rather than duplicating."""
     paths = goethe_pdf_paths(source_root)
     levels: list[LevelStats] = []
+    stored_ids: set[int] = set()
     for level, path in paths.items():
         records = _parse_level(level, path)
         persisted = persist_words(db, records, source="goethe")
         # persist_words returns one Word per record; duplicate keys yield the same
         # row twice, so dedupe by id to count what actually landed in the store.
         stored = {w.id: w for w in persisted}
+        stored_ids |= set(stored)
         levels.append(
             LevelStats(
                 level=level,
@@ -102,8 +121,18 @@ def ingest_goethe(db: DbSession, source_root: Path) -> GoetheStats:
                 needs_review=sum(w.needs_review for w in stored.values()),
             )
         )
+    # Thematic topics run after the alphabetical persist so they stamp topic onto rows
+    # already present, then insert any thematic-only lemmas. Fold the touched rows into
+    # the coverage id-set so total_words counts the inserts once.
+    topics, topic_words = apply_topics(db, _parse_topics(paths), source="goethe")
+    stored_ids |= {w.id for w in topic_words}
     edges = derive_family_edges(db)
-    return GoetheStats(levels=levels, family_edges=edges)
+    return GoetheStats(
+        levels=levels,
+        family_edges=edges,
+        topics=topics,
+        total_words=len(stored_ids),
+    )
 
 
 def _stats_dict(stats: GoetheStats) -> dict:
@@ -118,6 +147,10 @@ def _stats_dict(stats: GoetheStats) -> dict:
                     "needs_review": s.needs_review,
                 }
                 for s in stats.levels
+            },
+            "topics": {
+                "matched": stats.topics.matched,
+                "inserted": stats.topics.inserted,
             },
             "family_edges": stats.family_edges,
             "total_words": stats.total_words,
@@ -148,6 +181,9 @@ def _format_report(stats: GoetheStats, previous: dict | None) -> str:
             f"  {s.level}: {s.stored} words{delta} (from {s.parsed} parsed{merged}), "
             f"{s.needs_review} flagged needs_review"
         )
+    lines.append(
+        f"  topics: {stats.topics.matched} tagged, {stats.topics.inserted} inserted"
+    )
     lines.append(f"  family edges: {stats.family_edges}")
     lines.append(f"  total: {stats.total_words} distinct words")
     lines.append(

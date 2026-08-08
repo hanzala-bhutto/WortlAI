@@ -12,8 +12,9 @@ Two layers, mirroring #9's discipline of measuring rather than asserting:
 
 Goethe lists carry no English, so translation_en is always None. The A1 list has no
 verb conjugation (verb only via "(sich)"); the A2/B1 lists do, and their verbs carry a
-full VerbForm. B1 is parsed by the same two-column engine as A2 (its leading thematic
-section is out of scope). Genuinely ambiguous rows are flagged, not guessed.
+full VerbForm. B1's alphabetical section is parsed by the same two-column engine as A2;
+its leading thematic (WORTGRUPPEN) section is parsed separately into Word.topic by
+`parse_b1_topics` (#71). Genuinely ambiguous rows are flagged, not guessed.
 """
 
 from pathlib import Path
@@ -23,11 +24,18 @@ import pytest
 from app.rag.goethe_wordlist import (
     _A2_VERB_START_RE,
     _WRAPPED_PLURAL_RE,
+    _a2_topic_record,
     _classify_entry,
+    _classify_thematic_cell,
     _is_verb_form_continuation,
+    _is_wortgruppen_start,
     _parse_verb_forms,
+    _thematic_cells,
+    _topic_for_header,
     parse_a1_wordlist,
+    parse_a2_topics,
     parse_a2_wordlist,
+    parse_b1_topics,
 )
 
 # --- pure grammar tests (no PDF, always run) ------------------------------------
@@ -455,8 +463,8 @@ def b1_records():
 
 @needs_b1_pdf
 def test_b1_alphabetical_section_only(b1_records):
-    # The alphabetical section is pages 16-103; the leading 3-column WORTGRUPPEN
-    # thematic section (the deferred topic material) and the intro/TOC must be excluded.
+    # The alphabetical section is pages 16-103; the leading WORTGRUPPEN thematic section
+    # (parsed separately by parse_b1_topics, #71) and the intro/TOC must be excluded here.
     # The TOC repeats the "Alphabetischer Wortschatz" phrase - the margin guard must
     # not let it flip the section on early and drag the thematic pages in.
     pages = {r.source_page for r in b1_records}
@@ -487,3 +495,236 @@ def test_b1_preterite_verb_keeps_perfect(b1_records):
     assert abbiegen.verb.past_participle == "abgebogen"
     assert abbiegen.verb.prefix == "ab"
     assert not any(r.lemma.startswith("bog ab") for r in b1_records)
+
+
+# --- thematic WORTGRUPPEN stage (#71): pure unit tests (no PDF) ------------------
+
+
+def _row(*tokens):
+    """A visual row as the word dicts _thematic_cells reads (it only needs `text`)."""
+    return [{"text": t} for t in tokens]
+
+
+def test_topic_for_header_maps_whitelisted_groups():
+    assert _topic_for_header("TIERE") == "Tiere"
+    assert _topic_for_header("politische begriffe") == "Politische Begriffe"
+    # The long header resolves off its first word.
+    assert (
+        _topic_for_header("LÄNDER, KONTINENTE, NATIONALITÄTEN (STAATSANGEHÖRIGKEITEN)")
+        == "Länder und Nationalitäten"
+    )
+
+
+def test_topic_for_header_rejects_reference_data_groups():
+    # Reference-data groups are deliberately off the whitelist; a near-miss prefix
+    # ("BILDUNG:" vs "BILDUNGSEINRICHTUNGEN") must not slip through.
+    assert _topic_for_header("ZAHLEN, BRUCHZAHLEN") is None
+    assert _topic_for_header("BILDUNG: SCHULFÄCHER") is None
+    assert _topic_for_header("FARBEN") is None
+
+
+def test_thematic_cells_splits_a_three_column_row_at_the_articles():
+    # A TIERE row runs three columns; each noun cell is led by an article, and the
+    # leading region label / stray tokens before the first article are dropped.
+    cells = _thematic_cells(
+        _row("der", "Affe,", "-n", "der", "Hase,", "-n", "die", "Mücke,", "-n")
+    )
+    assert cells == ["der Affe, -n", "der Hase, -n", "die Mücke, -n"]
+
+
+def test_thematic_cells_drops_a_row_with_no_article():
+    assert _thematic_cells(_row("Biologie", "Musik")) == []
+
+
+def test_classify_thematic_clean_noun():
+    rec = _classify_thematic_cell("der Affe, -n", "Tiere", 13, "B1")
+    assert (rec.pos, rec.article, rec.lemma, rec.plural) == (
+        "noun",
+        "der",
+        "Affe",
+        "-n",
+    )
+    assert rec.topic == "Tiere"
+    assert rec.example_de is None and rec.level == "B1"
+    assert rec.needs_review is False
+
+
+def test_classify_thematic_trailing_derived_form_is_not_a_plural():
+    # "der Norden Nord-/nördlich": the slash is in a derived-form annotation, not the
+    # noun, so the lemma is clean, the plural is dropped, and nothing is flagged.
+    rec = _classify_thematic_cell(
+        "der Norden Nord-/nördlich", "Himmelsrichtungen", 11, "B1"
+    )
+    assert (rec.lemma, rec.plural, rec.needs_review) == ("Norden", None, False)
+
+
+def test_classify_thematic_slash_compound_is_flagged():
+    # A slash glued to the noun marks a multi-lemma cell; the first lemma is kept but
+    # the record is flagged, since the rest is not captured.
+    rec = _classify_thematic_cell(
+        "die Krippe/der Kindergarten/die Kindertagesstätte",
+        "Bildungseinrichtungen",
+        10,
+        "B1",
+    )
+    assert rec.lemma == "Krippe" and rec.needs_review is True
+
+
+def test_classify_thematic_flags_non_marker_comma_tail():
+    # A comma-tail that is a second lemma, not a plural ("die Realschule, Sekundarschule"
+    # on a Swiss school-type list), is flagged - and the tail is NOT stored as a plural.
+    rec = _classify_thematic_cell(
+        "die Realschule, Sekundarschule", "Bildungseinrichtungen", 10, "B1"
+    )
+    assert rec.lemma == "Realschule"
+    assert rec.plural is None and rec.needs_review is True
+
+
+def test_classify_thematic_keeps_diaeresis_plural():
+    # The PDF writes an umlaut plural as a standalone diaeresis ("¨-e"); it is a valid
+    # marker, kept as the plural and not flagged.
+    rec = _classify_thematic_cell("die Kuh, ¨-e", "Tiere", 13, "B1")
+    assert (rec.lemma, rec.plural, rec.needs_review) == ("Kuh", "¨-e", False)
+
+
+def test_classify_thematic_rejects_non_noun_cells():
+    # An adjective and a parenthesised head are not clean article-nouns -> dropped.
+    assert (
+        _classify_thematic_cell(
+            "die (Fach-)Hochschule", "Bildungseinrichtungen", 10, "B1"
+        )
+        is None
+    )
+    assert (
+        _classify_thematic_cell(
+            "der eigenen Herkunft", "Länder und Nationalitäten", 12, "B1"
+        )
+        is None
+    )
+
+
+# --- thematic stage: integration over the real B1 Wortliste ---------------------
+
+_WHITELIST_LABELS = {
+    "Tiere",
+    "Politische Begriffe",
+    "Himmelsrichtungen",
+    "Bildungseinrichtungen",
+    "Länder und Nationalitäten",
+}
+
+
+@pytest.fixture(scope="module")
+def b1_topics():
+    return parse_b1_topics(B1_PDF_PATH)
+
+
+@needs_b1_pdf
+def test_b1_topics_are_whitelisted_nouns_only(b1_topics):
+    assert {r.topic for r in b1_topics} <= _WHITELIST_LABELS
+    assert all(r.pos == "noun" and r.example_de is None for r in b1_topics)
+    assert all(r.level == "B1" for r in b1_topics)
+    # TIERE is the pristine reference group; its common animals must be present.
+    tiere = {r.lemma for r in b1_topics if r.topic == "Tiere"}
+    assert {"Hund", "Katze", "Pferd", "Vogel"} <= tiere
+
+
+@needs_b1_pdf
+def test_b1_topics_exclude_the_alphabetical_section(b1_topics):
+    # The thematic section is pages 8-15; the alphabetical Wortschatz (page 16 on) must
+    # not bleed in - it would arrive with example sentences the thematic grid never has.
+    assert b1_topics, "expected thematic records"
+    assert max(r.source_page for r in b1_topics) < 16
+
+
+@needs_b1_pdf
+def test_b1_topics_flag_only_the_messy_compound_cells(b1_topics):
+    # The clean noun groups parse pristine; only the slash-compound BILDUNGSEINRICHTUNGEN
+    # cells are flagged, so the overall rate stays low and TIERE is spotless.
+    rate = sum(r.needs_review for r in b1_topics) / len(b1_topics)
+    assert rate < 0.15, f"needs_review rate {rate:.1%} too high"
+    assert not any(r.needs_review for r in b1_topics if r.topic == "Tiere")
+
+
+# --- A2 front-matter thematic tables (#71): pure unit tests (no PDF) -------------
+
+
+def _wrow(*pairs):
+    """A row of word dicts with x0/top, for the column-aware A2 helpers."""
+    return [{"text": t, "x0": x, "top": 100} for x, t in pairs]
+
+
+def _col(*tokens):
+    """A single A2 column cell (tokens already isolated to one column)."""
+    return [{"text": t, "x0": 359, "top": 200} for t in tokens]
+
+
+def test_is_wortgruppen_start_needs_the_margin_heading():
+    # The margin heading triggers; the indented TOC line with the same word does not.
+    assert _is_wortgruppen_start([_wrow((89, "WORTGRUPPEN"), (89, "Abkürzungen"))])
+    assert not _is_wortgruppen_start([_wrow((143, "Wortgruppen"), (501, "5"))])
+
+
+def test_a2_topic_record_article_less_noun():
+    rec = _a2_topic_record(_col("Klasse,", "-n"), "Schule und Schulfächer", 6)
+    assert (rec.pos, rec.article, rec.lemma, rec.plural) == (
+        "noun",
+        None,
+        "Klasse",
+        "-n",
+    )
+    assert rec.topic == "Schule und Schulfächer" and rec.level == "A2"
+    assert rec.example_de is None and rec.needs_review is False
+
+
+def test_a2_topic_record_flags_pair_but_keeps_primary_lemma():
+    # A masc/fem pair (either "/" or ";" separated) keeps the primary lemma, flagged.
+    slash = _a2_topic_record(
+        _col("Bäcker,", "-", "/", "Bäckerin,", "-nen"), "Berufe", 5
+    )
+    assert slash.lemma == "Bäcker" and slash.needs_review is True
+    semi = _a2_topic_record(_col("Autor,", "-en;", "Autorin,", "-nen"), "Berufe", 5)
+    assert semi.lemma == "Autor" and semi.needs_review is True
+
+
+def test_a2_topic_record_glued_plural_and_continuation_row():
+    # "Babysitter,-" carries its plural glued to the lemma token.
+    rec = _a2_topic_record(_col("Babysitter,-"), "Berufe", 5)
+    assert (rec.lemma, rec.plural) == ("Babysitter", "-")
+    # A wrapped continuation row leads lowercase and is not an entry.
+    assert _a2_topic_record(_col("ter,", "-n"), "Berufe", 5) is None
+
+
+def test_a2_topic_record_captures_diaeresis_plural():
+    # The umlaut plural is written as a standalone diaeresis ("Stundenplan, ¨-e"); it must
+    # be captured from the next token, not silently dropped.
+    rec = _a2_topic_record(_col("Stundenplan,", "¨-e"), "Schule und Schulfächer", 6)
+    assert rec.plural == "¨-e" and rec.needs_review is False
+
+
+# --- A2 thematic tables: integration over the real A2 Wortliste -----------------
+
+
+@pytest.fixture(scope="module")
+def a2_topics():
+    return parse_a2_topics(A2_PDF_PATH)
+
+
+@needs_a2_pdf
+def test_a2_topics_are_whitelisted_nouns_only(a2_topics):
+    assert {r.topic for r in a2_topics} <= {"Berufe", "Schule und Schulfächer"}
+    assert all(r.pos == "noun" and r.article is None for r in a2_topics)
+    assert all(r.example_de is None and r.level == "A2" for r in a2_topics)
+    # The school subjects are the pristine reference set here.
+    schule = {r.lemma for r in a2_topics if r.topic == "Schule und Schulfächer"}
+    assert {"Biologie", "Mathematik", "Sport", "Abitur"} <= schule
+
+
+@needs_a2_pdf
+def test_a2_topics_stop_at_the_next_stacked_group(a2_topics):
+    # Each column stacks groups; the whitelisted read must stop at the vertical gap and
+    # not swallow the group below it (Himmelsrichtungen under Berufe, dates under Schule).
+    lemmas = {r.lemma for r in a2_topics}
+    assert not ({"Norden", "Himmelsrichtungen", "Januar", "Osten"} & lemmas)
+    # The flagged profession pairs still contribute their primary (masculine) lemma.
+    assert {"Arzt", "Lehrer", "Autor"} <= lemmas
