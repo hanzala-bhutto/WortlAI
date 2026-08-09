@@ -158,6 +158,15 @@ class Word(Base):
         foreign_keys="WordLink.from_word_id",
         cascade="all, delete-orphan",
     )
+    # The FSRS card for this word (#14). One-to-one and optional: a word is
+    # scheduled only once it is first graded from conversation, and deleting the
+    # word takes its card with it. Named `card` (not `state`) so the lifecycle
+    # stage reads `word.card.state`, not `word.state.state`.
+    card: Mapped["WordState | None"] = relationship(
+        back_populates="word",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class WordLink(Base):
@@ -222,6 +231,65 @@ class ErrorPatternLink(Base):
     )
     note: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    word: Mapped[Word] = relationship()
+
+
+class WordState(Base):
+    """The FSRS scheduling state for one learnable item, one row per Word. `Word`
+    is the only learnable row that exists yet; Redemittel chunks get their own
+    state table when they become first-class rows, and the engine (fsrs_engine,
+    reviews) is kept subject-agnostic so it reuses unchanged - see
+    docs/feasibility/014-fsrs-engine.md. `card_json` is the lossless py-fsrs Card
+    blob and the source of truth; `due` and `state` are mirrored out of it into
+    real columns so the due queue stays a plain indexed SQL read, never a JSON
+    scan."""
+
+    __tablename__ = "word_states"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    word_id: Mapped[int] = mapped_column(
+        ForeignKey("words.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    # Next review time, mirrored from card_json. Indexed: the due queue filters and
+    # orders on it every time the review UI or curriculum asks what to resurface.
+    # UTC and tz-aware end to end, since py-fsrs is UTC-only.
+    due: Mapped[datetime] = mapped_column(index=True)
+    # FSRS lifecycle stage: 1 Learning, 2 Review, 3 Relearning. A mirrored int, not
+    # an enum column, matching the plain-int/plain-string discipline the rest of
+    # the store uses.
+    state: Mapped[int] = mapped_column(Integer)
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(default=None)
+    # The serialized py-fsrs Card (Card.to_dict()). Source of truth for every FSRS
+    # internal (stability, difficulty, step); due/state above are derived mirrors.
+    card_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    word: Mapped[Word] = relationship(back_populates="card")
+
+
+class ReviewEvent(Base):
+    """One conversation-derived review: the grade a word got from how it was used
+    in a session, and the raw signal it came from. Append-only - both the audit
+    trail behind a WordState and the training data the FSRS optimizer will read
+    once 2-3 months of it exist (CLAUDE.md defers the optimizer until then).
+    Deleting a session nulls session_id rather than cascading, so the review
+    history - and the optimizer's data - outlives the conversation it came from."""
+
+    __tablename__ = "review_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    word_id: Mapped[int] = mapped_column(
+        ForeignKey("words.id", ondelete="CASCADE"), index=True
+    )
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # The FSRS grade applied: 1 Again, 2 Hard, 3 Good, 4 Easy.
+    rating: Mapped[int] = mapped_column(Integer)
+    # The conversation signal it mapped from: unprompted|glossed|failed|avoided.
+    signal: Mapped[str] = mapped_column(String(16))
+    reviewed_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
 
     word: Mapped[Word] = relationship()
 

@@ -6,13 +6,13 @@ without an HTTP layer. All grouping is by UTC calendar day; the progress skill
 it against the 2-month protocol.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
-from app.learner.models import ErrorLog, ImmersionLog
+from app.learner.models import ErrorLog, ImmersionLog, WordState
 
 
 class DayMinutes(NamedTuple):
@@ -61,6 +61,19 @@ def error_counts_by_type(
         TypeCount(error_type=row.error_type, count=int(row.count))
         for row in db.execute(stmt)
     ]
+
+
+def due_words(
+    db: DbSession, now: datetime | None = None, limit: int | None = None
+) -> list[WordState]:
+    """The review queue: cards whose due time has passed, soonest-due first - what
+    the review UI and the curriculum pull from. A new card is due immediately, so
+    a word appears here from its first scheduling until it is reviewed forward."""
+    now = now or datetime.now(UTC)
+    stmt = select(WordState).where(WordState.due <= now).order_by(WordState.due)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list(db.scalars(stmt))
 
 
 def record_session_immersion(db: DbSession, session_id: int, minutes: int) -> None:
