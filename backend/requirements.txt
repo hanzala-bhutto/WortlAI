@@ -35,6 +35,13 @@ edge-tts==7.2.8
 sqlalchemy==2.0.36
 alembic==1.14.0
 
+# FSRS spaced repetition over chunks (#14), quarantined behind fsrs_engine.py.
+# Pure Python, no native deps. Grades come from conversation use, not flashcard
+# taps (docs/feasibility/014-fsrs-engine.md). The optimizer that would tune weights
+# to real review history waits for 2-3 months of the review_events log, so stock
+# parameters for now.
+fsrs==6.3.1
+
 # RAG ingestion: deterministic glossary parsing (#9). Chosen over PyMuPDF for
 # char-level position access (page.chars, extract_words x_tolerance) needed to
 # work around the source PDF's font-level dropped-vowel bug - see
