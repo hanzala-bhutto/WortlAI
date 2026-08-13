@@ -24,6 +24,32 @@ The fastest German learners aren't using a trick. They get huge speaking volume,
 - **Daily missions**: a real task in your city, drilled in the morning, debriefed at night.
 - **Dashboard**: immersion hours against the 2-month target, CEFR trajectory, error trends.
 
+## Screenshots
+
+Talk mode, a B1 roleplay (Termin beim Arzt). You speak, the Tutor answers only in German, and the Redemittel panel shows the chunks to reach for. Errors never interrupt the conversation.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/talk-conversation-dark.png">
+  <img alt="Talk mode: a live German conversation with the Tutor, mic dock and Redemittel panel" src=".github/assets/talk-conversation-light.png">
+</picture>
+
+Pick a scenario, calibrated A1 through B1, each showing the phrases it practises:
+
+![Scenario picker with A1 to B1 roleplays](.github/assets/talk-scenarios.png)
+
+The debrief lands after the session, not during it: every error logged quietly, corrected and explained. Each one becomes an FSRS review.
+
+![Session debrief listing corrected errors](.github/assets/debrief.png)
+
+Home and the System panel, one glance at whether the backend, Qdrant and each API key are actually live:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/home-dark.png">
+  <img alt="Home page with the System status panel and mode list" src=".github/assets/home-light.png">
+</picture>
+
+> Screenshots are generated headlessly with Playwright (`npm run screenshots` in `frontend/`), which mocks the backend and voice socket, so they are reproducible with nothing else running. The command fetches its own Chromium on first run; set `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` to skip Playwright's browser download during `npm install`.
+
 ## Architecture
 
 React SPA (Vite) and a FastAPI backend, served from one origin in production. LangGraph runs the session as a checkpointed state graph. LlamaIndex ingests textbook PDFs into Qdrant, with a lexical graph in SQLite typed-edge tables. py-fsrs schedules reviews. Langfuse (self-hosted) handles traces, versioned prompts and evals. LLMs and Whisper come from Groq's free tier with NVIDIA NIM as fallback; voices from edge-tts.
