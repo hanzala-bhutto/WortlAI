@@ -42,6 +42,16 @@ alembic==1.14.0
 # parameters for now.
 fsrs==6.3.1
 
+# Transcript -> WordSignal classification (#76), quarantined behind
+# app/learner/signals.py. Lemmatizes the learner's turns so inflections collapse to
+# tracked lemmas (gehe/ging/gegangen -> gehen) and separable verbs recombine off the
+# `svp` dependency (komme ... mit -> mitkommen) - see
+# docs/feasibility/076-transcript-wordsignal-classification.md. The model is pinned
+# by wheel URL so a fresh install needs no separate `spacy download` step; its
+# version must track the spacy major line.
+spacy==3.8.7
+de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl
+
 # RAG ingestion: deterministic glossary parsing (#9). Chosen over PyMuPDF for
 # char-level position access (page.chars, extract_words x_tolerance) needed to
 # work around the source PDF's font-level dropped-vowel bug - see
