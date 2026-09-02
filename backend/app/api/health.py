@@ -14,6 +14,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.learner.signals import classifier_ready
 
 router = APIRouter(tags=["health"])
 
@@ -41,13 +42,21 @@ class QdrantStatus(BaseModel):
 class ReadinessResponse(BaseModel):
     status: Literal["ok", "degraded"] = Field(
         description=(
-            "degraded when a required API key is missing. A cold Qdrant is "
+            "degraded when a required API key is missing or the German spaCy model "
+            "the session-close FSRS fold needs is not installed. A cold Qdrant is "
             "reported but does not make the backend unready - nothing needs it "
             "until Phase 2 ingestion."
         )
     )
     qdrant: QdrantStatus
     keys_configured: KeysConfigured
+    classifier_ready: bool = Field(
+        description=(
+            "Whether the pinned German model is importable. False means every "
+            "session-close FSRS fold degrades to no reviews, so it is surfaced here "
+            "rather than left to a per-session log."
+        )
+    )
 
 
 @router.get("/health", response_model=HealthResponse, summary="Liveness")
@@ -73,8 +82,10 @@ async def readyz() -> ReadinessResponse:
         qdrant.error = f"{type(exc).__name__}: {exc}"
 
     keys = settings.configured_keys()
+    classifier = classifier_ready()
     return ReadinessResponse(
-        status="ok" if keys["groq"] else "degraded",
+        status="ok" if keys["groq"] and classifier else "degraded",
         qdrant=qdrant,
         keys_configured=KeysConfigured(**keys),
+        classifier_ready=classifier,
     )
