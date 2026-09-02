@@ -2,12 +2,21 @@
 
 from datetime import UTC, datetime
 
-from app.learner.models import ErrorLog, ImmersionLog, Session
+from app.learner.models import ErrorLog, ImmersionLog, Session, Word
 from app.learner.queries import (
     error_counts_by_type,
     hours_per_day,
     record_session_immersion,
+    words_at_level,
 )
+
+
+def _word(db, lemma: str, level: str) -> Word:
+    word = Word(
+        lemma=lemma, lemma_raw=lemma, pos="verb", level=level, source="glossary"
+    )
+    db.add(word)
+    return word
 
 
 def _day(y, m, d) -> datetime:
@@ -55,6 +64,24 @@ def test_record_session_immersion_folds_a_session_into_the_metric(db_session):
     assert row.source == "app"
     assert row.minutes == 18
     assert row.session_id == session.id
+
+
+def test_words_at_level_returns_only_that_levels_deck(db_session):
+    a2_one = _word(db_session, "gehen", "A2")
+    a2_two = _word(db_session, "kommen", "A2")
+    _word(db_session, "erwaegen", "B2")  # a higher-level word must not leak in
+    db_session.commit()
+
+    result = words_at_level(db_session, "A2")
+
+    assert [w.id for w in result] == [a2_one.id, a2_two.id]  # ordered by id
+
+
+def test_words_at_level_is_empty_when_the_deck_has_no_such_level(db_session):
+    _word(db_session, "gehen", "A2")
+    db_session.commit()
+
+    assert words_at_level(db_session, "B1") == []
 
 
 def test_error_counts_rank_types_by_frequency(db_session):
