@@ -13,7 +13,8 @@ columns, not free LLM text.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+import logging
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -22,6 +23,9 @@ from sqlalchemy.orm import Session as DbSession
 from app.learner.db import SessionLocal
 from app.learner.models import ErrorLog, Session
 from app.learner.queries import record_session_immersion
+from app.learner.signals import fold_session_reviews
+
+logger = logging.getLogger(__name__)
 
 # One caught error, as the already-validated columns of an error_logs row. A TypedDict
 # would over-promise here; the Corrector (#5) owns the real schema.
@@ -67,10 +71,20 @@ class SessionWriter:
         *,
         ended_at: datetime | None = None,
         errors: Sequence[ErrorRow] = (),
+        messages: Sequence[Mapping[str, object]] = (),
+        level: str | None = None,
     ) -> None:
-        """Close the session: stamp ended_at, write the caught errors, and fold the
-        elapsed minutes into the immersion metric as an app-source block. Missing
-        session ids are a programming error, so they raise rather than pass."""
+        """Close the session: stamp ended_at, write the caught errors, fold the elapsed
+        minutes into the immersion metric, and fold the transcript into FSRS state.
+        Missing session ids are a programming error, so they raise rather than pass.
+
+        `messages` (the transcript) and `level` (the session's CEFR rung) drive the
+        FSRS fold; with either absent it is skipped, so a session that never reached
+        converse closes cleanly. The fold shares this transaction, so reviews commit
+        atomically with the close; it isolates its own writes in a savepoint and any
+        failure is caught and logged here (guardrail 4), so a broken classifier or a
+        half-written batch degrades to "closed without reviews", never blocks the
+        close, and a fold that grades nothing leaves no rows at all."""
         with self._scope() as db:
             session = db.get(Session, session_id)
             if session is None:
@@ -83,3 +97,16 @@ class SessionWriter:
             minutes = (session.duration_seconds or 0) // 60
             if minutes > 0:
                 record_session_immersion(db, session_id, minutes)
+            if messages and level:
+                try:
+                    # Stamp the reviews at the session's own end time (now the
+                    # resolved session.ended_at), so a card's due and the review
+                    # audit row agree with the close, not with wall-clock.
+                    fold_session_reviews(
+                        db, messages, level, session_id, when=session.ended_at
+                    )
+                except Exception:
+                    logger.exception(
+                        "FSRS fold failed for session %s; closing without reviews",
+                        session_id,
+                    )
