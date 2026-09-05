@@ -146,7 +146,15 @@ def build_session_graph(deps: SessionGraphDeps) -> StateGraph:
         # errors already seeded into state, and persist the lot as validated rows.
         caught = await collector.collect(session_id)
         errors = [*state.get("pending_errors", []), *caught]
-        await asyncio.to_thread(persister.end_session, session_id, errors=errors)
+        # The transcript and level drive the FSRS fold inside end_session (#77); the
+        # sync classify+schedule runs in the same thread as the close, off the loop.
+        await asyncio.to_thread(
+            persister.end_session,
+            session_id,
+            errors=errors,
+            messages=state.get("messages", []),
+            level=state.get("level"),
+        )
         return {"phase": "done", "pending_errors": errors}
 
     builder = StateGraph(SessionState)

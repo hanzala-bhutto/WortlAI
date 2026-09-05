@@ -12,7 +12,7 @@ from typing import NamedTuple
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
-from app.learner.models import ErrorLog, ImmersionLog, WordState
+from app.learner.models import ErrorLog, ImmersionLog, Word, WordState
 
 
 class DayMinutes(NamedTuple):
@@ -73,6 +73,15 @@ def due_words(
     stmt = select(WordState).where(WordState.due <= now).order_by(WordState.due)
     if limit is not None:
         stmt = stmt.limit(limit)
+    return list(db.scalars(stmt))
+
+
+def words_at_level(db: DbSession, level: str) -> list[Word]:
+    """Every learnable Word at one CEFR level, ordered by id for a stable target
+    list. The session-close fold (#77) turns these into the classifier's targets:
+    the deck the session could plausibly exercise, matched against what was actually
+    spoken so real production - not a flashcard tap - is what schedules a card."""
+    stmt = select(Word).where(Word.level == level).order_by(Word.id)
     return list(db.scalars(stmt))
 
 

@@ -12,8 +12,12 @@ The lemmatizer has to see through German inflection and separable verbs, so thos
 get their own cases rather than being assumed.
 """
 
+from fsrs import Rating
+from sqlalchemy import select
+
 from app.learner.grading import Signal
-from app.learner.signals import Target, classify_transcript
+from app.learner.models import ReviewEvent, Word, WordState
+from app.learner.signals import Target, classify_transcript, fold_session_reviews
 
 # One target keyed by the lemma the learner is meant to produce. word_id is opaque
 # here - the classifier never touches the DB, it just threads it back out.
@@ -34,6 +38,13 @@ def _tutor(text: str) -> dict:
 
 def _by_word(signals):
     return {s.word_id: s for s in signals}
+
+
+def _deck_word(db, lemma: str, pos: str = "verb", level: str = "A2") -> Word:
+    word = Word(lemma=lemma, lemma_raw=lemma, pos=pos, level=level, source="glossary")
+    db.add(word)
+    db.commit()
+    return word
 
 
 def test_unprompted_use_grades_from_learner_turn():
@@ -179,3 +190,93 @@ def test_non_string_content_is_skipped_not_crashed():
     )
     assert signals[0].signal is Signal.UNPROMPTED
     assert signals[0].unprompted_uses == 1
+
+
+# --- fold_session_reviews: the #77 seam that grades the level deck from a transcript
+
+
+def test_fold_schedules_only_the_words_the_learner_produced(db_session):
+    """Two of three A2 words come up in speech -> two cards, two events; the untouched
+    word gets nothing. AVOIDED is dropped, so an unspoken deck word is never graded."""
+    gehen = _deck_word(db_session, "gehen")
+    suppe = _deck_word(db_session, "Suppe", pos="noun")
+    _deck_word(db_session, "kaufen")  # never said -> no card, no Again row
+
+    fold_session_reviews(
+        db_session,
+        [_user("Ich gehe zur Arbeit und hätte gern die Suppe.")],
+        level="A2",
+    )
+    db_session.commit()
+
+    carded = {s.word_id for s in db_session.scalars(select(WordState))}
+    assert carded == {gehen.id, suppe.id}
+
+
+def test_fold_grades_a_glossed_word_hard_and_an_unprompted_one_good(db_session):
+    """A word the Tutor handed over first grades Hard; one produced cold grades Good."""
+    gehen = _deck_word(db_session, "gehen")
+    suppe = _deck_word(db_session, "Suppe", pos="noun")
+
+    fold_session_reviews(
+        db_session,
+        [
+            _user("Ich gehe jeden Tag zur Arbeit."),
+            _tutor("Möchten Sie die Suppe probieren?"),
+            _user("Ja, ich nehme die Suppe."),
+        ],
+        level="A2",
+    )
+    db_session.commit()
+
+    events = {e.word_id: e.rating for e in db_session.scalars(select(ReviewEvent))}
+    assert events[gehen.id] == Rating.Good.value  # unprompted
+    assert events[suppe.id] == Rating.Hard.value  # glossed (Tutor said it first)
+
+
+def test_fold_with_no_production_writes_nothing(db_session):
+    """A transcript that touches no deck word is a clean no-op - no rows, no error."""
+    _deck_word(db_session, "gehen")
+
+    fold_session_reviews(db_session, [_user("Okay, tschüss.")], level="A2")
+    db_session.commit()
+
+    assert db_session.scalars(select(WordState)).all() == []
+    assert db_session.scalars(select(ReviewEvent)).all() == []
+
+
+def test_fold_on_an_empty_deck_is_a_no_op(db_session):
+    """No words at the level -> no targets -> nothing folded, matching #77's no-op."""
+    fold_session_reviews(db_session, [_user("Ich gehe zur Arbeit.")], level="A2")
+    db_session.commit()
+
+    assert db_session.scalars(select(WordState)).all() == []
+
+
+def test_fold_disambiguates_a_homograph_by_pos(db_session):
+    """The noun `Morgen` (morning) and the adverb `morgen` (tomorrow) share a lemma at
+    one level. Producing the noun must card the noun word only, not the adverb - the
+    pos gate is what stops one surface form from crediting both cards (#77 review)."""
+    morgen_noun = _deck_word(db_session, "Morgen", pos="noun")
+    morgen_adv = _deck_word(db_session, "morgen", pos="other")
+
+    fold_session_reviews(
+        db_session, [_user("Guten Morgen, wie geht es Ihnen?")], level="A2"
+    )
+    db_session.commit()
+
+    carded = {s.word_id for s in db_session.scalars(select(WordState))}
+    assert carded == {morgen_noun.id}  # the adverb card is untouched
+    assert morgen_adv.id not in carded
+
+
+def test_classify_pos_gates_the_lemma_match():
+    """At the classifier level: an adverb-pos target does not match the noun token, so
+    a bare lemma set (pre-review behaviour) would have over-credited it."""
+    noun = Target(word_id=1, lemma="Morgen", pos="noun")
+    adverb = Target(word_id=2, lemma="morgen", pos="other")
+
+    signals = _by_word(classify_transcript([_user("Guten Morgen!")], [noun, adverb]))
+
+    assert signals[1].signal is Signal.UNPROMPTED  # noun produced
+    assert signals[2].signal is Signal.AVOIDED  # adverb not produced

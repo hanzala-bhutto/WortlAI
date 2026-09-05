@@ -44,14 +44,24 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, NamedTuple
 
 from app.learner.grading import Signal
-from app.learner.reviews import WordSignal
+from app.learner.queries import words_at_level
+from app.learner.reviews import WordSignal, apply_session_reviews
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from spacy.language import Language
     from spacy.tokens import Doc
+    from sqlalchemy.orm import Session as DbSession
+
+# The signals a session-close fold acts on: production the learner actually managed.
+# UNPROMPTED (Good/Easy) and GLOSSED (Hard) create or advance a card; AVOIDED is left
+# off deliberately - see fold_session_reviews.
+_GRADED_SIGNALS = frozenset({Signal.UNPROMPTED, Signal.GLOSSED})
 
 # The German model the pedagogy rules pin (CLAUDE.md). Pinned in requirements.txt by
 # wheel URL so it is importable without a separate `spacy download`.
@@ -118,12 +128,20 @@ _SEPARABLE_PREFIXES: tuple[str, ...] = tuple(
 
 
 class Target(NamedTuple):
-    """One item the session was meant to exercise: the FSRS word_id and the lemma to
-    match against the learner's speech. Kept decoupled from the ORM so the classifier
-    is pure and the caller (#77) builds these from due Word rows."""
+    """One item the session was meant to exercise: the FSRS word_id, the lemma to match
+    against the learner's speech, and its coarse part of speech. Kept decoupled from the
+    ORM so the classifier is pure and the caller (fold_session_reviews) builds these
+    from the level deck.
+
+    `pos` (the Word.pos taxonomy: noun|verb|other) disambiguates homographs that share a
+    lemma at one level - the noun `Morgen` from the adverb `morgen`, the noun `Recht`
+    from the adverb `recht` - so producing one does not credit the other's card. Left
+    None (the default) it matches pos-agnostically, the pre-#77 behaviour the grade-map
+    tests pin."""
 
     word_id: int
     lemma: str
+    pos: str | None = None
 
 
 class _Separable(NamedTuple):
@@ -138,7 +156,19 @@ class _Turn(NamedTuple):
     """Everything one transcript turn produced that a target can match against."""
 
     lemmas: frozenset[str]  # content lemmas, casefolded (catches joined/participle)
+    lemma_pos: frozenset[tuple[str, str]]  # (lemma, coarse pos) for pos-aware matching
     svp: tuple[tuple[str, str, str], ...]  # (prefix, head_lemma, head_surface) per svp
+
+
+def _coarse_pos(upos: str) -> str:
+    """Map a spaCy UPOS tag onto the Word.pos taxonomy (noun|verb|other) a target
+    carries, so a stored pos can gate a lemma match. AUX counts as verb (haben/sein/
+    werden), PROPN as noun; adjectives, adverbs and the rest land in other."""
+    if upos in ("NOUN", "PROPN"):
+        return "noun"
+    if upos in ("VERB", "AUX"):
+        return "verb"
+    return "other"
 
 
 def _split_separable(lemma: str) -> _Separable | None:
@@ -154,6 +184,15 @@ def _split_separable(lemma: str) -> _Separable | None:
             stem = base[:-2] if base.endswith("en") else base[:-1]
             return _Separable(prefix, base, stem)
     return None
+
+
+def classifier_ready() -> bool:
+    """Whether the pinned German model is importable - the readiness signal behind the
+    session-close fold. When it is missing every fold degrades to "closed without
+    reviews" (guardrail 4) and due_words silently stays empty, so /readyz reports this
+    to make a broken install visible instead of leaving it to a per-session log line.
+    Checks importability, not a full pipeline load, so the probe stays cheap."""
+    return find_spec(_MODEL) is not None
 
 
 @lru_cache(maxsize=1)
@@ -172,27 +211,37 @@ def _analyze(doc: Doc) -> _Turn:
     The svp linkage is trusted without a POS check on the head - it is reliable even
     where the head verb itself is mis-tagged (`Kommst du mit?`), and matching guards
     against a stray prefix by requiring the head to agree with a target's base verb."""
-    lemmas = {
-        tok.lemma_.casefold() for tok in doc if not (tok.is_punct or tok.is_space)
-    }
+    content = [tok for tok in doc if not (tok.is_punct or tok.is_space)]
+    lemmas = {tok.lemma_.casefold() for tok in content}
+    lemma_pos = {(tok.lemma_.casefold(), _coarse_pos(tok.pos_)) for tok in content}
     svp = [
         (tok.text.casefold(), tok.head.lemma_.casefold(), tok.head.text.casefold())
         for tok in doc
         if tok.tag_ == "PTKVZ" or tok.dep_ == "svp"
     ]
-    return _Turn(frozenset(lemmas), tuple(svp))
+    return _Turn(frozenset(lemmas), frozenset(lemma_pos), tuple(svp))
 
 
-def _produces(turn: _Turn, lemma: str, sep: _Separable | None) -> bool:
+def _produces(
+    turn: _Turn, lemma: str, sep: _Separable | None, pos: str | None = None
+) -> bool:
     """Did this turn produce the target? A direct lemma hit covers ordinary words and
     the joined/participle forms of separable verbs (`mitkommen`, `mitgebracht`). A
     split separable verb is matched off its prefix token whose head verb agrees with
     the base - by exact lemma, or by stem prefix when the model mis-lemmatized a
     fronted finite verb. The prefix equality is what keeps `an` + a `ruf-` verb from
-    matching a `mit-` target."""
-    if lemma in turn.lemmas:
+    matching a `mit-` target.
+
+    When `pos` is given the direct hit must also agree with the token's coarse pos, so
+    a homograph of a different pos (`morgen` the adverb vs `Morgen` the noun) does not
+    match; None keeps the pos-agnostic hit. The svp path is verb-only, so a non-verb
+    target never reaches it."""
+    if pos is None:
+        if lemma in turn.lemmas:
+            return True
+    elif (lemma, pos) in turn.lemma_pos:
         return True
-    if sep is None:
+    if sep is None or pos not in (None, "verb"):
         return False
     for prefix, head_lemma, head_surface in turn.svp:
         if prefix != sep.prefix:
@@ -224,43 +273,46 @@ def classify_transcript(
     `unprompted_uses` counts producing *turns*, not occurrences: two uses in one breath
     is one retrieval, so it takes two separate turns to earn Easy. One WordSignal per
     target, in the given order, so a target duplicated across word_ids (a lemma that
-    recurs across levels) each gets its own row."""
+    recurs across levels, or the same lemma under two parts of speech) each gets its
+    own row, matched by its own (lemma, pos) key."""
     if not targets:
         return []
     nlp = nlp or get_nlp()
     failed = {lemma.casefold() for lemma in (failed_lemmas or set())}
-    # One descriptor per distinct target lemma; separable split is a pure function of
-    # the lemma, so the casefolded lemma is the whole key. Duplicate word_ids share it.
-    descriptors: dict[str, _Separable | None] = {}
+    # One descriptor per distinct (lemma, pos) target: the pos disambiguates homographs
+    # that share a lemma, and the separable split is a pure function of the lemma.
+    # Duplicate word_ids with the same (lemma, pos) share a descriptor and a hit.
+    Key = tuple[str, str | None]
+    descriptors: dict[Key, _Separable | None] = {}
     for target in targets:
-        key = target.lemma.casefold()
+        key: Key = (target.lemma.casefold(), target.pos)
         if key not in descriptors:
-            descriptors[key] = _split_separable(key)
+            descriptors[key] = _split_separable(key[0])
 
-    said_by_tutor: set[str] = set()  # target lemmas the Tutor has produced so far
-    glossed: set[str] = set()  # produced by learner only after a prior Tutor mention
-    produced_turns: Counter[str] = Counter()  # learner turns that produced each lemma
+    said_by_tutor: set[Key] = set()  # target keys the Tutor has produced so far
+    glossed: set[Key] = set()  # produced by learner only after a prior Tutor mention
+    produced_turns: Counter[Key] = Counter()  # learner turns that produced each key
 
     for message in messages:
         content = message.get("content")
         turn = _analyze(nlp(content if isinstance(content, str) else ""))
-        hits = {key for key, sep in descriptors.items() if _produces(turn, key, sep)}
+        hits = {k for k, sep in descriptors.items() if _produces(turn, k[0], sep, k[1])}
         role = message.get("role")
         if role == "assistant":
             said_by_tutor |= hits
         elif role == "user":
-            for key in hits:
+            for k in hits:
                 # A gloss only counts if it preceded the learner's *first* use, so this
-                # fires once, before produced_turns records the lemma.
-                if produced_turns[key] == 0 and key in said_by_tutor:
-                    glossed.add(key)
-                produced_turns[key] += 1
+                # fires once, before produced_turns records the key.
+                if produced_turns[k] == 0 and k in said_by_tutor:
+                    glossed.add(k)
+                produced_turns[k] += 1
 
     signals: list[WordSignal] = []
     for target in targets:
-        key = target.lemma.casefold()
+        key = (target.lemma.casefold(), target.pos)
         uses = produced_turns.get(key, 0)
-        if key in failed:
+        if key[0] in failed:
             signal = Signal.FAILED
         elif uses == 0:
             signal = Signal.AVOIDED
@@ -270,3 +322,36 @@ def classify_transcript(
             signal = Signal.UNPROMPTED
         signals.append(WordSignal(target.word_id, signal, max(uses, 1)))
     return signals
+
+
+def fold_session_reviews(
+    db: DbSession,
+    messages: Sequence[Mapping[str, object]],
+    level: str,
+    session_id: int | None = None,
+    when: datetime | None = None,
+) -> None:
+    """Grade a finished session's transcript into FSRS state (#77). The target deck
+    is every Word at the session's CEFR level; the classifier decides how each showed
+    up, and only what the learner actually produced is folded - UNPROMPTED and GLOSSED.
+
+    AVOIDED is dropped, not scheduled: with the whole level deck as targets, an
+    unspoken word means only "this scenario didn't call for it," not a failed review,
+    so grading it Again would tank cards that were never in play. AVOIDED gets an
+    honest referent once the curriculum (#26) assigns a small per-session target set;
+    until then the fold only ever creates or advances a card off real production, which
+    is exactly the "grades come from conversation" rule.
+
+    The caller owns the outer transaction; this adds rows without committing. The
+    CPU-bound classification (spaCy, no writes) runs first, outside any savepoint;
+    only the writes go inside a savepoint, so a failure mid-batch rolls back the
+    whole batch instead of leaving a half-written fold to commit with the close."""
+    targets = [
+        Target(word.id, word.lemma, word.pos) for word in words_at_level(db, level)
+    ]
+    signals = classify_transcript(messages, targets)
+    produced = [s for s in signals if s.signal in _GRADED_SIGNALS]
+    if not produced:
+        return  # nothing graded -> no savepoint, no rows (the clean no-op close)
+    with db.begin_nested():
+        apply_session_reviews(db, produced, session_id, when)

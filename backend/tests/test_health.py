@@ -52,6 +52,28 @@ def test_readyz_reports_qdrant_ready_when_it_answers(monkeypatch):
     assert body["qdrant"]["error"] is None
 
 
+def test_readyz_reports_classifier_ready_when_the_model_is_installed():
+    """The German spaCy model ships pinned in requirements, so a real deployment
+    reports the session-close fold's classifier as available."""
+    body = client.get("/readyz").json()
+    assert body["classifier_ready"] is True
+
+
+def test_readyz_degrades_when_the_classifier_model_is_missing(monkeypatch):
+    """A missing model silently breaks every FSRS fold; /readyz must surface it as
+    degraded rather than leaving it to per-session logs. Keys are forced present so
+    the classifier is the sole degrader under test."""
+    monkeypatch.setattr("app.api.health.classifier_ready", lambda: False)
+    monkeypatch.setattr(
+        "app.config.Settings.configured_keys",
+        lambda self: {"groq": True, "nim": True, "langfuse": True},
+    )
+
+    body = client.get("/readyz").json()
+    assert body["classifier_ready"] is False
+    assert body["status"] == "degraded"
+
+
 # --- Contract: operational probes stay unversioned, domain routes do not ---
 
 
